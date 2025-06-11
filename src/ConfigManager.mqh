@@ -64,7 +64,7 @@ struct TradingCalendar
 };
 
 
-input int OffsetBroker_Ore = 0; // Fallback manuale classe TimeManager
+//input int OffsetBroker_Ore = 0; // Fallback manuale classe TimeManager
 
 //+------------------------------------------------------------------+
 //| ConfigManager Class                                             |

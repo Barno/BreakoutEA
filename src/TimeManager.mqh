@@ -83,6 +83,9 @@ private:
     bool IsValidOffset(int offsetHours);
     void SetError(const string error);
     datetime CreateDateTime(int year, int month, int day, int hour = 0, int minute = 0);
+    string DetectTimeZoneName(int offsetHours, datetime serverTime);
+    bool IsSummerPeriod(datetime timeToCheck);
+    bool IsBrokerDSTActive(int offsetHours, datetime serverTime);
 };
 
 //+------------------------------------------------------------------+
@@ -342,12 +345,9 @@ bool TimeManager::DetectBrokerTimeZone()
 {
     Print("TimeManager: Attempting auto-detection of broker timezone...");
     
-    // Ottieni orario server
-    datetime serverTime = TimeCurrent();
-    
-    // Ottieni orario GMT (stima basata su orario locale)
-    datetime localTime = TimeLocal();
-    datetime gmtTime = TimeGMT();
+    // Ottieni orario server e GMT
+    datetime serverTime = TimeCurrent();//Restituisce l'ultimo orario conosciuto di server (orario della ricevuta dell'ultima quotazione) nel formato datetime
+    datetime gmtTime = TimeGMT(); //Restituisce GMT in formato datetime con l'ora legale dell' orario locale del computer, in cui il terminale client è in esecuzione
     
     if(gmtTime == 0)
     {
@@ -355,22 +355,114 @@ bool TimeManager::DetectBrokerTimeZone()
         return false;
     }
     
-    // Calcola offset approssimativo
-    int estimatedOffset = CalculateOffsetFromGMT(serverTime, gmtTime);
+    // Calcola offset in ore
+    int offsetSeconds = (int)(serverTime - gmtTime);
+    int offsetHours = offsetSeconds / 3600;
     
-    if(!IsValidOffset(estimatedOffset))
+    // Arrotonda per gestire minuti extra
+    int remainingMinutes = MathAbs(offsetSeconds % 3600) / 60;
+    if(remainingMinutes > 30)
     {
-        SetError("Detected invalid offset: " + IntegerToString(estimatedOffset));
+        offsetHours += (offsetSeconds > 0) ? 1 : -1;
+    }
+    
+    if(!IsValidOffset(offsetHours))
+    {
+        SetError("Detected invalid offset: " + IntegerToString(offsetHours));
         return false;
     }
     
-    m_brokerTimeZone.offsetHours = estimatedOffset;
-    m_brokerTimeZone.timeZoneName = "Auto_Detected";
+    // Determina timezone probabile basata su offset
+    string detectedTimeZone = DetectTimeZoneName(offsetHours, serverTime);
     
-    Print("TimeManager: Auto-detected broker timezone GMT", 
-          estimatedOffset > 0 ? "+" : "", estimatedOffset);
+    m_brokerTimeZone.offsetHours = offsetHours;
+    m_brokerTimeZone.timeZoneName = detectedTimeZone;
+    m_brokerTimeZone.isDSTActive = IsBrokerDSTActive(offsetHours, serverTime);
+    
+    Print("TimeManager: Auto-detected broker timezone: ", detectedTimeZone, 
+          " (GMT", offsetHours > 0 ? "+" : "", offsetHours, ")");
     
     return true;
+}
+
+//+------------------------------------------------------------------+
+//| Determina nome timezone da offset                              |
+//+------------------------------------------------------------------+
+string TimeManager::DetectTimeZoneName(int offsetHours, datetime serverTime)
+{
+    // Verifica se è estate o inverno per DST
+    bool isSummer = IsSummerPeriod(serverTime);
+    
+    switch(offsetHours)
+    {
+        case 0:  return "GMT/UTC (London)";
+        case 1:  return isSummer ? "CET/CEST (Central Europe Summer)" : "CET (Central Europe)";
+        case 2:  
+            if(isSummer)
+                return "EET/EEST (Eastern Europe Summer - Cyprus/Greece)";
+            else
+                return "EET (Eastern Europe - Cyprus/Greece)";
+        case 3:  
+            if(isSummer)
+                return "IDT (Israel Daylight Time)";
+            else
+                return "IST/MSK (Israel Standard/Moscow Time)";
+        case 4:  return "GST (Gulf Standard - Dubai/Abu Dhabi)";
+        case 5:  return "PKT (Pakistan Time)";
+        case 6:  return "BST (Bangladesh Time)";
+        case 7:  return "ICT (Indochina Time)";
+        case 8:  return "SGT/CST (Singapore/China Time)";
+        case 9:  return "JST (Japan Standard Time)";
+        case 10: return "AEST (Australian Eastern Time)";
+        case -5: return isSummer ? "EDT (US Eastern Daylight)" : "EST (US Eastern Standard)";
+        case -6: return isSummer ? "CDT (US Central Daylight)" : "CST (US Central Standard)";
+        case -7: return isSummer ? "PDT (US Pacific Daylight)" : "PST (US Pacific Standard)";
+        case -8: return "PST (US Pacific Standard)";
+        default: 
+            return "Unknown (GMT" + (offsetHours > 0 ? "+" : "") + IntegerToString(offsetHours) + ")";
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Verifica se è periodo estivo (approssimativo)                  |
+//+------------------------------------------------------------------+
+bool TimeManager::IsSummerPeriod(datetime timeToCheck)
+{
+    MqlDateTime dt;
+    TimeToStruct(timeToCheck, dt);
+    
+    // Approssimazione: Aprile-Settembre = estate
+    return (dt.mon >= 4 && dt.mon <= 9);
+}
+
+//+------------------------------------------------------------------+
+//| Verifica se broker ha DST attivo                               |
+//+------------------------------------------------------------------+
+bool TimeManager::IsBrokerDSTActive(int offsetHours, datetime serverTime)
+{
+    // Logica DST basata su timezone comune dei broker
+    bool isSummer = IsSummerPeriod(serverTime);
+    
+    switch(offsetHours)
+    {
+        case 1:  // Europa Centrale (molti broker EU)
+        case 2:  // Europa Orientale (Cipro, Grecia)
+            return isSummer; // DST attivo in estate
+            
+        case 3:  // Israele (molti broker forex)
+            return isSummer; // Israele ha DST
+            
+        case 0:  // Regno Unito
+            return isSummer; // UK ha DST
+            
+        case -5: // US Eastern
+        case -6: // US Central  
+        case -7: // US Pacific
+            return isSummer; // USA ha DST
+            
+        default:
+            return false; // Conservativo per timezone sconosciute
+    }
 }
 
 //+------------------------------------------------------------------+

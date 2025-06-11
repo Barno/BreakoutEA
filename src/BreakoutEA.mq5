@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                               BreakoutEA.mq5    |
 //|                                  Strategia Breakout Bidirezionale |
-//|                                      Con ChartVisualizer Integrato |
+//|                                      Con TimeManager e ChartVisualizer |
 //+------------------------------------------------------------------+
 #property copyright "BreakoutEA Team"
 #property version   "1.00"
-#property description "Strategia Breakout Bidirezionale con Visualizzazione"
+#property description "Strategia Breakout Bidirezionale con Timezone Detection"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -19,13 +19,13 @@
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
 //+------------------------------------------------------------------+
-input group "=== CANDELE DI RIFERIMENTO ==="
+input group "=== CANDELE DI RIFERIMENTO ORARIO ITA ==="
 input int CandeleRiferimento_Ora1 = 8;           
 input int CandeleRiferimento_Minuti1 = 45;       
-input int CandeleRiferimento_Ora2 = 14;          
-input int CandeleRiferimento_Minuti2 = 45;       
+input int CandeleRiferimento_Ora2 = 15;          
+input int CandeleRiferimento_Minuti2 = 15;       
 input ENUM_TIMEFRAMES TimeframeRiferimento = PERIOD_M15;
-input color ColoreLineaVerticale = clrRed;        // Colore righe di riferimento
+input color ColoreLineaVerticale = clrRed;        
 
 input group "=== GESTIONE DEL RISCHIO ==="
 input double RischioPercentuale = 0.5;           
@@ -51,8 +51,12 @@ input bool TradingSabato = false;
 input bool TradingDomenica = false;             
 
 input group "=== VISUALIZZAZIONE ==="
-input int LineWidth = 1;                        // Spessore righe verticali
-input ENUM_LINE_STYLE LineStyle = STYLE_SOLID;  // Stile righe verticali
+input int LineWidth = 1;                        
+input ENUM_LINE_STYLE LineStyle = STYLE_SOLID;  
+
+input group "=== TIME MANAGEMENT ==="
+input int OffsetBroker_Ore = 0;                 // Offset manuale broker (fallback)
+input bool EnableAutoDetection = true;          // Abilita auto-detection timezone
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                 |
@@ -70,7 +74,7 @@ datetime g_lastCleanupCheck = 0;
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("=== BREAKOUT EA WITH CHART VISUALIZER ===");
+   Print("=== BREAKOUT EA WITH TIMEZONE DETECTION ===");
    Print("Symbol: ", Symbol(), " | Timeframe: ", EnumToString(Period()));
    
    g_isInitialized = false;
@@ -84,8 +88,21 @@ int OnInit()
    }
    Print("SUCCESS: ConfigManager initialized");
    
-   // Step 2: Inizializza ChartVisualizer  
-   Print("\n2. INITIALIZING: ChartVisualizer");
+   // Step 2: Inizializza TimeManager
+   Print("\n2. INITIALIZING: TimeManager");
+   if(!InitializeTimeManager())
+   {
+      Print("ERROR: TimeManager initialization failed");
+      return(INIT_FAILED);
+   }
+   Print("SUCCESS: TimeManager initialized");
+   
+   // Step 3: Test timezone detection
+   Print("\n3. TESTING: Timezone Detection");
+   TestBrokerTimezoneDetection();
+   
+   // Step 4: Inizializza ChartVisualizer  
+   Print("\n4. INITIALIZING: ChartVisualizer");
    if(!InitializeChartVisualizer())
    {
       Print("ERROR: ChartVisualizer initialization failed");
@@ -93,20 +110,16 @@ int OnInit()
    }
    Print("SUCCESS: ChartVisualizer initialized");
    
-   // Step 3: Disegna righe iniziali
-   Print("\n3. DRAWING: Initial Reference Lines");
+   // Step 5: Disegna righe iniziali
+   Print("\n5. DRAWING: Initial Reference Lines");
    DrawInitialReferenceLines();
    
-   // Step 4: Setup timer per operazioni periodiche
-   EventSetTimer(3600); // Timer ogni ora per cleanup
+   // Step 6: Setup timer
+   EventSetTimer(300); // Timer ogni 5 minuti
    
    g_isInitialized = true;
    g_lastVisualizationUpdate = TimeCurrent();
    g_lastCleanupCheck = TimeCurrent();
-
-   // In OnInit():
-g_timeManager = new TimeManager();
-g_timeManager.Initialize(OffsetBroker_Ore);
    
    Print("\n=== BREAKOUT EA INITIALIZED SUCCESSFULLY ===");
    return(INIT_SUCCEEDED);
@@ -122,7 +135,7 @@ void OnDeinit(const int reason)
    
    EventKillTimer();
    
-   // Cleanup ChartVisualizer
+   // Cleanup in reverse order
    if(g_chartVisualizer != NULL)
    {
       g_chartVisualizer.CleanupAllLines();
@@ -130,7 +143,12 @@ void OnDeinit(const int reason)
       g_chartVisualizer = NULL;
    }
    
-   // Cleanup ConfigManager
+   if(g_timeManager != NULL)
+   {
+      delete g_timeManager;
+      g_timeManager = NULL;
+   }
+   
    if(g_configManager != NULL)
    {
       delete g_configManager;
@@ -149,7 +167,7 @@ void OnTick()
 {
    if(!g_isInitialized) return;
    
-   // Check se serve aggiornare visualizzazione (ogni nuovo giorno)
+   // Check aggiornamento visualizzazione
    datetime currentTime = TimeCurrent();
    if(ShouldUpdateVisualization(currentTime))
    {
@@ -157,8 +175,7 @@ void OnTick()
       g_lastVisualizationUpdate = currentTime;
    }
    
-   // TODO: Aggiungere logica trading principale qui
-   // ProcessMainTradingLogic();
+   // TODO: Logica trading principale
 }
 
 //+------------------------------------------------------------------+
@@ -170,8 +187,8 @@ void OnTimer()
    
    datetime currentTime = TimeCurrent();
    
-   // Cleanup periodico (ogni 24 ore)
-   if(currentTime - g_lastCleanupCheck > 86400) // 24 ore in secondi
+   // Cleanup periodico
+   if(currentTime - g_lastCleanupCheck > 86400) // 24 ore
    {
       Print("Timer: Performing periodic cleanup...");
       if(g_chartVisualizer != NULL)
@@ -181,9 +198,9 @@ void OnTimer()
       g_lastCleanupCheck = currentTime;
    }
    
-   // Log heartbeat
-   Print("Timer: BreakoutEA heartbeat - Visualization objects: ", 
-         g_chartVisualizer != NULL ? g_chartVisualizer.GetObjectCount() : 0);
+   // Log timezone status periodico
+   Print("\n=== TIMER: TIMEZONE STATUS UPDATE ===");
+   LogCurrentTimezoneStatus();
 }
 
 //+------------------------------------------------------------------+
@@ -192,13 +209,8 @@ void OnTimer()
 bool InitializeConfigManager()
 {
    g_configManager = new ConfigManager();
-   if(g_configManager == NULL)
-   {
-      Print("ERROR: Failed to create ConfigManager");
-      return false;
-   }
+   if(g_configManager == NULL) return false;
    
-   // Carica parametri
    if(!g_configManager.LoadParameters(
       RischioPercentuale, LevaBroker, SpreadBufferPips, MaxSpreadPips,
       CandeleRiferimento_Ora1, CandeleRiferimento_Minuti1, 
@@ -207,19 +219,21 @@ bool InitializeConfigManager()
       TP2_RiskReward, TP2_PercentualeVolume, AttivareBreakevenDopoTP,
       TradingLunedi, TradingMartedi, TradingMercoledi, TradingGiovedi, 
       TradingVenerdi, TradingSabato, TradingDomenica))
-   {
-      Print("ERROR: Failed to load parameters");
       return false;
-   }
    
-   // Valida parametri
-   if(!g_configManager.ValidateParameters())
-   {
-      Print("ERROR: Parameter validation failed - ", g_configManager.GetLastError());
-      return false;
-   }
+   return g_configManager.ValidateParameters();
+}
+
+//+------------------------------------------------------------------+
+//| Inizializza TimeManager                                         |
+//+------------------------------------------------------------------+
+bool InitializeTimeManager()
+{
+   g_timeManager = new TimeManager();
+   if(g_timeManager == NULL) return false;
    
-   return true;
+   g_timeManager.EnableAutoDetection(EnableAutoDetection);
+   return g_timeManager.Initialize(OffsetBroker_Ore);
 }
 
 //+------------------------------------------------------------------+
@@ -228,74 +242,247 @@ bool InitializeConfigManager()
 bool InitializeChartVisualizer()
 {
    g_chartVisualizer = new ChartVisualizer();
-   if(g_chartVisualizer == NULL)
-   {
-      Print("ERROR: Failed to create ChartVisualizer");
-      return false;
-   }
+   if(g_chartVisualizer == NULL) return false;
    
-   // Inizializza con parametri da input (NO hardcoded!)
-   if(!g_chartVisualizer.Initialize(ColoreLineaVerticale, LineWidth, LineStyle))
-   {
-      Print("ERROR: Failed to initialize ChartVisualizer");
-      return false;
-   }
-   
-   return true;
+   return g_chartVisualizer.Initialize(ColoreLineaVerticale, LineWidth, LineStyle);
 }
 
 //+------------------------------------------------------------------+
-//| Disegna righe di riferimento iniziali                          |
+//| Test rilevamento timezone broker                               |
+//+------------------------------------------------------------------+
+void TestBrokerTimezoneDetection()
+{
+   if(g_timeManager == NULL) return;
+   
+   Print("\n--- BROKER TIMEZONE DETECTION (Enhanced) ---");
+   
+   // Dati temporali raw con TimeTradeServer (più preciso)
+   MqlDateTime serverDt;
+   datetime serverTime = TimeTradeServer(serverDt);
+   datetime currentTime = TimeCurrent();
+   datetime gmtTime = TimeGMT();
+   
+   Print("=== RAW TIME DATA (Enhanced Detection) ===");
+   Print("Server Time (TimeTradeServer): ", TimeToString(serverTime, TIME_DATE | TIME_MINUTES | TIME_SECONDS));
+   Print("Current Time (TimeCurrent): ", TimeToString(currentTime, TIME_DATE | TIME_MINUTES | TIME_SECONDS));
+   Print("GMT Time: ", TimeToString(gmtTime, TIME_DATE | TIME_MINUTES | TIME_SECONDS));
+   
+   // Mostra differenza tra TimeTradeServer e TimeCurrent
+   int diffSeconds = (int)(serverTime - currentTime);
+   if(diffSeconds != 0)
+   {
+      Print("IMPORTANT: TimeTradeServer vs TimeCurrent difference: ", diffSeconds, " seconds");
+      Print("Using TimeTradeServer for more accurate timezone detection");
+   }
+   else
+   {
+      Print("TimeTradeServer and TimeCurrent are synchronized");
+   }
+   
+   // Calcolo offset dettagliato
+   if(gmtTime > 0)
+   {
+      int offsetSeconds = (int)(serverTime - gmtTime);
+      int offsetHours = offsetSeconds / 3600;
+      int offsetMinutes = MathAbs(offsetSeconds % 3600) / 60;
+      
+      Print("\nOFFSET CALCULATION DETAILS:");
+      Print("Raw offset (seconds): ", offsetSeconds);
+      Print("Calculated offset: GMT", offsetHours > 0 ? "+" : "", offsetHours, 
+            ":", StringFormat("%02d", offsetMinutes));
+   }
+   
+   // Timezone rilevate
+   TimeZoneInfo brokerTZ = g_timeManager.GetBrokerTimeZone();
+   TimeZoneInfo italianTZ = g_timeManager.GetItalianTimeZone();
+   
+   Print("\n=== DETECTED BROKER TIMEZONE ===");
+   Print("Timezone Name: ", brokerTZ.timeZoneName);
+   Print("GMT Offset: ", brokerTZ.offsetHours > 0 ? "+" : "", brokerTZ.offsetHours, " hours");
+   Print("DST Status: ", brokerTZ.isDSTActive ? "ACTIVE" : "INACTIVE");
+   
+   Print("\n=== ITALIAN TIMEZONE ===");
+   Print("Timezone Name: ", italianTZ.timeZoneName);
+   Print("GMT Offset: ", italianTZ.offsetHours > 0 ? "+" : "", italianTZ.offsetHours, " hours");  
+   Print("DST Status: ", italianTZ.isDSTActive ? "ACTIVE (Summer)" : "INACTIVE (Winter)");
+   
+   // Mostra dettagli struttura MqlDateTime del server
+   Print("\n=== SERVER TIME DETAILS (MqlDateTime) ===");
+   Print("Year: ", serverDt.year);
+   Print("Month: ", StringFormat("%02u", serverDt.mon));
+   Print("Day: ", StringFormat("%02u", serverDt.day));
+   Print("Hour: ", StringFormat("%02u", serverDt.hour));
+   Print("Minute: ", StringFormat("%02u", serverDt.min));
+   Print("Second: ", StringFormat("%02u", serverDt.sec));
+   Print("Day of Week: ", serverDt.day_of_week, " (", GetDayOfWeekName(serverDt.day_of_week), ")");
+   Print("Day of Year: ", serverDt.day_of_year);
+   
+   // Analisi geografica
+   AnalyzeBrokerLocation(brokerTZ);
+   
+   // Test conversioni
+   TestTimeConversions();
+   
+   // Differenza temporale
+   CalculateTimeDifference(brokerTZ, italianTZ);
+}
+
+//+------------------------------------------------------------------+
+//| Ottiene nome giorno della settimana                            |
+//+------------------------------------------------------------------+
+string GetDayOfWeekName(int dayOfWeek)
+{
+   switch(dayOfWeek)
+   {
+      case 0: return "SUNDAY";
+      case 1: return "MONDAY";
+      case 2: return "TUESDAY";
+      case 3: return "WEDNESDAY";
+      case 4: return "THURSDAY";
+      case 5: return "FRIDAY";
+      case 6: return "SATURDAY";
+      default: return "UNKNOWN";
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Analizza posizione geografica broker                           |
+//+------------------------------------------------------------------+
+void AnalyzeBrokerLocation(const TimeZoneInfo& brokerTZ)
+{
+   Print("\n=== BROKER GEOGRAPHIC ANALYSIS ===");
+   
+   string timezoneName = brokerTZ.timeZoneName;
+   
+   if(StringFind(timezoneName, "Israel") >= 0)
+   {
+      Print("🇮🇱 BROKER SERVERS LIKELY IN ISRAEL");
+      Print("   Location: Tel Aviv / Jerusalem area");
+      Print("   Many Forex brokers use Israeli data centers");
+      Print("   IST (Winter): GMT+2 | IDT (Summer): GMT+3");
+   }
+   else if(StringFind(timezoneName, "Cyprus") >= 0 || StringFind(timezoneName, "Eastern Europe") >= 0)
+   {
+      Print("🇨🇾 BROKER SERVERS LIKELY IN CYPRUS");
+      Print("   Location: Nicosia / Limassol area");
+      Print("   EU-regulated brokers often use Cyprus servers");
+      Print("   EET (Winter): GMT+2 | EEST (Summer): GMT+3");
+   }
+   else if(StringFind(timezoneName, "London") >= 0 || StringFind(timezoneName, "GMT") >= 0)
+   {
+      Print("🇬🇧 BROKER SERVERS LIKELY IN UNITED KINGDOM");
+      Print("   Location: London area");
+   }
+   else if(StringFind(timezoneName, "Central Europe") >= 0)
+   {
+      Print("🇪🇺 BROKER SERVERS LIKELY IN CENTRAL EUROPE");
+      Print("   Location: Germany, France, or Netherlands");
+   }
+   else
+   {
+      Print("🌍 BROKER TIMEZONE: ", timezoneName);
+      Print("   Offset: GMT", brokerTZ.offsetHours > 0 ? "+" : "", brokerTZ.offsetHours);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Test conversioni temporali                                      |
+//+------------------------------------------------------------------+
+void TestTimeConversions()
+{
+   if(g_timeManager == NULL) return;
+   
+   Print("\n=== TIME CONVERSION TESTS ===");
+   
+   datetime currentBroker = g_timeManager.GetBrokerTime();
+   datetime currentItalian = g_timeManager.GetItalianTime();
+   
+   Print("Current Broker Time: ", TimeToString(currentBroker, TIME_DATE | TIME_MINUTES));
+   Print("Current Italian Time: ", TimeToString(currentItalian, TIME_DATE | TIME_MINUTES));
+   
+   // Test conversione sessione 8:45
+   SessionConfig sessionConfig = g_configManager.GetSessionConfig();
+   datetime italianSession = CalculateItalianSessionTime(sessionConfig.referenceHour1, sessionConfig.referenceMinute1);
+   datetime brokerSession = g_timeManager.ConvertItalianToBroker(italianSession);
+   
+   Print("\nSESSION TIME CONVERSION:");
+   Print("Italian ", sessionConfig.referenceHour1, ":", StringFormat("%02d", sessionConfig.referenceMinute1),
+         " = ", TimeToString(italianSession, TIME_DATE | TIME_MINUTES));
+   Print("Broker equivalent = ", TimeToString(brokerSession, TIME_DATE | TIME_MINUTES));
+}
+
+//+------------------------------------------------------------------+
+//| Calcola differenza temporale                                   |
+//+------------------------------------------------------------------+
+void CalculateTimeDifference(const TimeZoneInfo& brokerTZ, const TimeZoneInfo& italianTZ)
+{
+   Print("\n=== TIME DIFFERENCE CALCULATION ===");
+   
+   int italianCurrentOffset = italianTZ.offsetHours + (italianTZ.isDSTActive ? 1 : 0);
+   int brokerCurrentOffset = brokerTZ.offsetHours + (brokerTZ.isDSTActive ? 1 : 0);
+   int timeDiff = brokerCurrentOffset - italianCurrentOffset;
+   
+   if(timeDiff == 0)
+   {
+      Print("✅ BROKER AND ITALY: SAME TIMEZONE");
+      Print("   No time conversion needed");
+   }
+   else if(timeDiff > 0)
+   {
+      Print("⏰ BROKER IS ", timeDiff, " HOUR(S) AHEAD OF ITALY");
+      SessionConfig config = g_configManager.GetSessionConfig();
+      Print("   Italian ", config.referenceHour1, ":45 = Broker ", (config.referenceHour1 + timeDiff) % 24, ":45");
+   }
+   else
+   {
+      Print("⏰ BROKER IS ", MathAbs(timeDiff), " HOUR(S) BEHIND ITALY");
+      SessionConfig config = g_configManager.GetSessionConfig();
+      Print("   Italian ", config.referenceHour1, ":45 = Broker ", (config.referenceHour1 + timeDiff + 24) % 24, ":45");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Disegna righe di riferimento                                   |
 //+------------------------------------------------------------------+
 void DrawInitialReferenceLines()
 {
-   if(g_configManager == NULL || g_chartVisualizer == NULL) return;
+   if(g_configManager == NULL || g_chartVisualizer == NULL || g_timeManager == NULL) return;
    
-   // Ottieni configurazione sessioni (NO hardcoded!)
    SessionConfig sessionConfig = g_configManager.GetSessionConfig();
    
-   // Disegna riga per sessione 1
-   datetime session1Time = CalculateReferenceCandleTime(
-      sessionConfig.referenceHour1,
-      sessionConfig.referenceMinute1
-   );
+   // Calcola tempi sessioni in orario italiano
+   datetime session1TimeIT = CalculateItalianSessionTime(sessionConfig.referenceHour1, sessionConfig.referenceMinute1);
+   datetime session2TimeIT = CalculateItalianSessionTime(sessionConfig.referenceHour2, sessionConfig.referenceMinute2);
    
-   if(session1Time > 0)
+   // Converti in orario broker per il disegno
+   datetime session1TimeBroker = g_timeManager.ConvertItalianToBroker(session1TimeIT);
+   datetime session2TimeBroker = g_timeManager.ConvertItalianToBroker(session2TimeIT);
+   
+   // Disegna le righe (usando orario broker perché il grafico è in orario broker)
+   if(session1TimeBroker > 0)
    {
-      g_chartVisualizer.DrawReferenceCandle(session1Time, "Session1");
-      Print("Reference line drawn for Session1 at ", TimeToString(session1Time, TIME_DATE | TIME_MINUTES));
+      g_chartVisualizer.DrawReferenceCandle(session1TimeBroker, "Session1");
+      Print("Reference line drawn for Session1 - IT: ", TimeToString(session1TimeIT, TIME_MINUTES),
+            " | Broker: ", TimeToString(session1TimeBroker, TIME_MINUTES));
    }
    
-   // Disegna riga per sessione 2
-   datetime session2Time = CalculateReferenceCandleTime(
-      sessionConfig.referenceHour2,
-      sessionConfig.referenceMinute2
-   );
-   
-   if(session2Time > 0)
+   if(session2TimeBroker > 0)
    {
-      g_chartVisualizer.DrawReferenceCandle(session2Time, "Session2");
-      Print("Reference line drawn for Session2 at ", TimeToString(session2Time, TIME_DATE | TIME_MINUTES));
+      g_chartVisualizer.DrawReferenceCandle(session2TimeBroker, "Session2");
+      Print("Reference line drawn for Session2 - IT: ", TimeToString(session2TimeIT, TIME_MINUTES),
+            " | Broker: ", TimeToString(session2TimeBroker, TIME_MINUTES));
    }
 }
 
 //+------------------------------------------------------------------+
-//| Calcola tempo candela di riferimento                           |
+//| Calcola tempo sessione italiana                                |
 //+------------------------------------------------------------------+
-datetime CalculateReferenceCandleTime(int hour, int minute)
+datetime CalculateItalianSessionTime(int hour, int minute)
 {
-   // Validazione parametri
-   if(hour < 0 || hour > 23 || minute < 0 || minute > 59)
-   {
-      Print("ERROR: Invalid time parameters - Hour: ", hour, " Minute: ", minute);
-      return 0;
-   }
-   
-   datetime currentTime = TimeCurrent();
+   datetime currentItalian = g_timeManager.GetItalianTime();
    MqlDateTime dt;
-   TimeToStruct(currentTime, dt);
+   TimeToStruct(currentItalian, dt);
    
-   // Imposta orario sessione (NO hardcoded!)
    dt.hour = hour;
    dt.min = minute;
    dt.sec = 0;
@@ -304,42 +491,53 @@ datetime CalculateReferenceCandleTime(int hour, int minute)
 }
 
 //+------------------------------------------------------------------+
-//| Determina se serve aggiornare visualizzazione                  |
+//| Log status timezone corrente                                   |
+//+------------------------------------------------------------------+
+void LogCurrentTimezoneStatus()
+{
+   if(g_timeManager == NULL) return;
+   
+   datetime brokerTime = g_timeManager.GetBrokerTime();
+   datetime italianTime = g_timeManager.GetItalianTime();
+   TimeZoneInfo brokerTZ = g_timeManager.GetBrokerTimeZone();
+   
+   Print(">>> REALTIME TIMEZONE STATUS <<<");
+   Print("Broker: ", TimeToString(brokerTime, TIME_DATE | TIME_MINUTES | TIME_SECONDS),
+         " (", brokerTZ.timeZoneName, ")");
+   Print("Italy: ", TimeToString(italianTime, TIME_DATE | TIME_MINUTES | TIME_SECONDS),
+         " (Europe/Rome)");
+   
+   bool isTradingDay = g_timeManager.IsTradingDay(italianTime);
+   bool isMarketOpen = g_timeManager.IsMarketOpen(italianTime);
+   
+   Print("Trading Day: ", isTradingDay ? "YES" : "NO");
+   Print("Market Open: ", isMarketOpen ? "YES" : "NO");
+}
+
+//+------------------------------------------------------------------+
+//| Altri metodi esistenti                                         |
 //+------------------------------------------------------------------+
 bool ShouldUpdateVisualization(datetime currentTime)
 {
-   // Se è il primo tick del giorno, aggiorna
    MqlDateTime currentDt, lastUpdateDt;
    TimeToStruct(currentTime, currentDt);
    TimeToStruct(g_lastVisualizationUpdate, lastUpdateDt);
    
-   // Nuovo giorno = nuovo update
    return (currentDt.day != lastUpdateDt.day || 
            currentDt.mon != lastUpdateDt.mon || 
            currentDt.year != lastUpdateDt.year);
 }
 
-//+------------------------------------------------------------------+
-//| Aggiorna righe di riferimento                                  |
-//+------------------------------------------------------------------+
 void UpdateReferenceLines()
 {
    if(g_chartVisualizer == NULL) return;
    
    Print("Updating reference lines for new day...");
-   
-   // Cleanup righe del giorno precedente
    g_chartVisualizer.CleanupPreviousDayLines();
-   
-   // Disegna nuove righe per oggi
    DrawInitialReferenceLines();
-   
    Print("Reference lines updated successfully");
 }
 
-//+------------------------------------------------------------------+
-//| Ottiene descrizione motivo deinit                              |
-//+------------------------------------------------------------------+
 string GetDeinitReasonText(const int reason)
 {
    switch(reason)
