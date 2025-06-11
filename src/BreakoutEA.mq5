@@ -14,6 +14,7 @@
 #include "Enums.mqh"
 #include "ConfigManager.mqh"
 #include "ChartVisualizer.mqh"
+#include "TimeManager.mqh"
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
@@ -58,6 +59,7 @@ input ENUM_LINE_STYLE LineStyle = STYLE_SOLID;  // Stile righe verticali
 //+------------------------------------------------------------------+
 ConfigManager* g_configManager = NULL;
 ChartVisualizer* g_chartVisualizer = NULL;
+TimeManager* g_timeManager = NULL;
 
 bool g_isInitialized = false;
 datetime g_lastVisualizationUpdate = 0;
@@ -101,6 +103,10 @@ int OnInit()
    g_isInitialized = true;
    g_lastVisualizationUpdate = TimeCurrent();
    g_lastCleanupCheck = TimeCurrent();
+
+   // In OnInit():
+g_timeManager = new TimeManager();
+g_timeManager.Initialize(OffsetBroker_Ore);
    
    Print("\n=== BREAKOUT EA INITIALIZED SUCCESSFULLY ===");
    return(INIT_SUCCEEDED);

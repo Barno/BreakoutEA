@@ -63,13 +63,16 @@ struct TradingCalendar
                        thursday(true), friday(true), saturday(false), sunday(false) {}
 };
 
+
+input int OffsetBroker_Ore = 0; // Fallback manuale classe TimeManager
+
 //+------------------------------------------------------------------+
 //| ConfigManager Class                                             |
 //+------------------------------------------------------------------+
 class ConfigManager
 {
 private:
-    RiskConfig       m_riskConfig;
+    RiskConfig       m_riskConfig; //variabile membro
     SessionConfig    m_sessionConfig;
     TPConfig         m_tpConfig;
     TradingCalendar  m_calendar;
