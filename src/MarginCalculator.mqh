@@ -10,22 +10,8 @@
 #include "Enums.mqh"
 
 //+------------------------------------------------------------------+
-//| Strutture per Asset Information                                 |
+//| Strutture per Margin Information (AssetInfo è in Enums.mqh)   |
 //+------------------------------------------------------------------+
-struct AssetInfo
-{
-    AssetType type;             // Tipo asset (Forex, Index, Crypto, etc.)
-    double contractSize;        // Contract size
-    double tickSize;            // Tick size minimo
-    double tickValue;           // Valore monetario per tick
-    double marginRate;          // Tasso margin requirement
-    string baseQuoteCurrency;   // Valuta base/quote
-    int digits;                 // Decimali prezzo
-    
-    AssetInfo() : type(ASSET_UNKNOWN), contractSize(0), tickSize(0), 
-                  tickValue(0), marginRate(0), baseQuoteCurrency(""), digits(0) {}
-};
-
 struct MarginInfo
 {
     double requiredMargin;      // Margine richiesto
@@ -327,11 +313,8 @@ double MarginCalculator::CalculateMaxLotsForMargin(const string symbol, ENUM_ORD
 }
 
 //+------------------------------------------------------------------+
-//| Implementazione metodi privati continua...                     |
+//| Implementazione metodi privati                                 |
 //+------------------------------------------------------------------+
-
-// METODI PRIVATI - Implementazione Base per MVP
-// (Implementazione completa nei prossimi step)
 
 AssetInfo MarginCalculator::DetectAssetProperties(const string symbol)
 {
@@ -342,6 +325,12 @@ AssetInfo MarginCalculator::DetectAssetProperties(const string symbol)
     info.tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
     info.marginRate = GetSymbolMarginRate(symbol);
     info.digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    
+    // ✅ Inizializza anche i nuovi campi
+    info.baseSymbol = "";
+    info.quoteSymbol = "";
+    info.pointValue = (info.tickSize > 0) ? (info.tickValue / info.tickSize) : info.tickValue;
+    info.baseQuoteCurrency = ""; // Verrà popolato da AssetDetector se usato
     
     return info;
 }

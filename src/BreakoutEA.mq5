@@ -4,19 +4,20 @@
 //|                                  Broker Time System - Simplified |
 //+------------------------------------------------------------------+
 #property copyright "Ben Team"
-#property version   "0.10"
+#property version   "0.11"
 #property description "Strategia Breakout Bidirezionale - Broker Time System"
 #property strict
 
 //+------------------------------------------------------------------+
-//| Include Headers                                                  |
+//| Include Headers (ORDINE CORRETTO per Dependencies)             |
 //+------------------------------------------------------------------+
 #include "Enums.mqh"
 #include "ConfigManager.mqh"
 #include "ChartVisualizer.mqh"
 #include "TelegramLogger.mqh"
-#include "MarginCalculator.mqh"
-#include "RiskManager.mqh"
+#include "MarginCalculator.mqh"      // ✅ PRIMA di AssetDetector (AssetDetector usa AssetInfo)
+#include "AssetDetector.mqh"         // ✅ DOPO MarginCalculator
+#include "RiskManager.mqh"           // ✅ ULTIMO (usa entrambi)
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
@@ -72,9 +73,9 @@ input bool LogSystemHealth = true;              // Log stato sistema
 ConfigManager* g_configManager = NULL;
 ChartVisualizer* g_chartVisualizer = NULL;
 TelegramLogger* g_telegramLogger = NULL;
-MarginCalculator* g_marginCalc = NULL;
-RiskManager* g_riskManager = NULL;
-
+MarginCalculator* g_marginCalc = NULL;          // ✅ PRIMA
+AssetDetector* g_assetDetector = NULL;          // ✅ DOPO MarginCalculator
+RiskManager* g_riskManager = NULL;              // ✅ ULTIMO
 
 bool g_isInitialized = false;
 datetime g_lastVisualizationUpdate = 0;
@@ -87,7 +88,7 @@ datetime g_lastServerTimeCheck = 0;
 int OnInit()
 {
    
-   Print("🚀 BenStrategy v1.20 - Broker Time System");
+   Print("🚀 BenStrategy v1.21 - Broker Time System + AssetDetector");
    Print("Symbol: ", Symbol(), " | Timeframe: ", EnumToString(Period()));
    
    g_isInitialized = false;
@@ -108,10 +109,37 @@ int OnInit()
       Print("ERROR: ChartVisualizer initialization failed");
       return(INIT_FAILED);
    }
-   
+
+   // ✅ ORDINE CORRETTO: MarginCalculator PRIMA
+   if(!InitializeMarginCalculator())
+   {
+      Print("ERROR: MarginCalculator initialization failed");
+      return(INIT_FAILED);
+   }
+
+   // ✅ ORDINE CORRETTO: AssetDetector DOPO MarginCalculator
+   if(!InitializeAssetDetector())
+   {
+      Print("ERROR: AssetDetector initialization failed");
+      return(INIT_FAILED);
+   }
+
+   // ✅ ORDINE CORRETTO: RiskManager ULTIMO
+   if(!InitializeRiskManagerWithAssetDetector())
+   {
+      Print("ERROR: RiskManager initialization failed");
+      return(INIT_FAILED);
+   }
    
    // Disegna righe di riferimento iniziali
    DrawInitialReferenceLines();
+   
+   // Inizializza TelegramLogger
+   if(!InitializeTelegramLogger())
+   {
+      Print("ERROR: TelegramLogger initialization failed");
+      return(INIT_FAILED);
+   }
    
    // Invia messaggio di avvio sistema
    SendSystemStartupMessage();
@@ -125,32 +153,21 @@ int OnInit()
    g_lastServerTimeCheck = TimeCurrent();
    
    Print("✅ BreakoutEA initialized successfully");
-   
-   // Inizializza TelegramLogger
-   if(!InitializeTelegramLogger())
-   {
-      Print("ERROR: TelegramLogger initialization failed");
-      return(INIT_FAILED);
-   }
 
    string serverTime = TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES);
 
+   // ====== TEST COMPLETO - DA RIMUOVERE DOPO VALIDAZIONE ======
+   TestCompleteSystem();
+   // ====== FINE TEST ======
 
-   // ====== TEST DA TOGLIERE ======
-   // Test base MARGIN CALULATOR
-   // TestMarginCalculatorComplete();
+   LogBrokerAndSymbolInfo();
 
-   // // Inizializza RiskManager
-   // if(!InitializeRiskManager())
-   // {
-   //    Print("ERROR: RiskManager initialization failed");
-   //    return(INIT_FAILED);
-   // }
-
-   // TestRiskManagerComplete();
-   // ====== FINE TEST DA TOGLIERE ======
-
-   g_telegramLogger.SendTelegramMessage("EA started successfully - Server time: " + serverTime);   return(INIT_SUCCEEDED);
+   if(g_telegramLogger.IsEnabled())
+   {
+      g_telegramLogger.SendTelegramMessage("EA started successfully - Server time: " + serverTime);
+   }
+   
+   return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
@@ -163,7 +180,25 @@ void OnDeinit(const int reason)
    
    EventKillTimer();
    
-   // Cleanup in reverse order
+   // ✅ CLEANUP IN REVERSE ORDER
+   if(g_riskManager != NULL)
+   {
+      delete g_riskManager;
+      g_riskManager = NULL;
+   }
+   
+   if(g_assetDetector != NULL)
+   {
+      delete g_assetDetector;
+      g_assetDetector = NULL;
+   }
+   
+   if(g_marginCalc != NULL)
+   {
+      delete g_marginCalc;
+      g_marginCalc = NULL;
+   }
+   
    if(g_chartVisualizer != NULL)
    {
       g_chartVisualizer.CleanupAllLines();
@@ -189,16 +224,6 @@ void OnDeinit(const int reason)
    }
    
    g_isInitialized = false;
-
-   //====== TEST DA TOGLIERE ======
-   CleanupMarginCalculatorTest();
-   if(g_riskManager != NULL)
-   {
-      delete g_riskManager;
-      g_riskManager = NULL;
-   }
-   //====== TEST DA TOGLIERE ======
-
    
    Print("✅ BreakoutEA shutdown completed");
 }
@@ -248,6 +273,209 @@ void OnTimer()
    // Server time check alle 2:00 AM
    CheckServerTimeAlert(currentTime);
 }
+
+//+------------------------------------------------------------------+
+//| ✅ NUOVO: Inizializza MarginCalculator                         |
+//+------------------------------------------------------------------+
+bool InitializeMarginCalculator()
+{
+   g_marginCalc = new MarginCalculator();
+   if(g_marginCalc == NULL) 
+   {
+      Print("ERROR: Failed to create MarginCalculator");
+      return false;
+   }
+   
+   // Configura safety settings
+   g_marginCalc.SetSafetyMarginPercent(20.0);
+   g_marginCalc.SetMaxMarginUtilization(80.0);
+   
+   Print("✅ MarginCalculator initialized successfully");
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| ✅ NUOVO: Inizializza AssetDetector                           |
+//+------------------------------------------------------------------+
+bool InitializeAssetDetector()
+{
+   g_assetDetector = new AssetDetector();
+   if(g_assetDetector == NULL) 
+   {
+      Print("ERROR: Failed to create AssetDetector");
+      return false;
+   }
+   
+   // Configura cache timeout (opzionale)
+   g_assetDetector.SetCacheTimeout(300); // 5 minuti
+   
+   Print("✅ AssetDetector initialized successfully");
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| ✅ AGGIORNATO: RiskManager con AssetDetector               |
+//+------------------------------------------------------------------+
+bool InitializeRiskManagerWithAssetDetector()
+{
+   g_riskManager = new RiskManager();
+   if(g_riskManager == NULL) 
+   {
+      Print("ERROR: Failed to create RiskManager");
+      return false;
+   }
+   
+   // ✅ NUOVO: Initialize con AssetDetector
+   if(!g_riskManager.Initialize(g_marginCalc, g_assetDetector))
+   {
+      Print("ERROR: RiskManager initialization failed - ", g_riskManager.GetLastError());
+      return false;
+   }
+   
+   // Configura parametri (invariato)
+   g_riskManager.SetMaxRiskPerTrade(2.0);
+   g_riskManager.SetMaxMarginUtilization(80.0);
+   g_riskManager.SetUseEquityForRisk(false);
+   
+   Print("✅ RiskManager initialized successfully with AssetDetector integration");
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| ✅ NUOVO: Test Sistema Completo                               |
+//+------------------------------------------------------------------+
+void TestCompleteSystem()
+{
+   Print("\n🧪 ==============================================");
+   Print("🧪 COMPLETE SYSTEM TEST SUITE");
+   Print("🧪 ==============================================");
+   
+   // Test 1: MarginCalculator
+   TestMarginCalculatorBasic();
+   
+   // Test 2: AssetDetector
+   TestAssetDetectorBasic();
+   
+   // Test 3: RiskManager
+   TestRiskManagerBasic();
+   
+   // Test 4: Integration Test
+   TestSystemIntegration();
+   
+   Print("🧪 ==============================================");
+   Print("🧪 COMPLETE SYSTEM TEST COMPLETED");
+   Print("🧪 ==============================================\n");
+}
+
+//+------------------------------------------------------------------+
+//| Test MarginCalculator Basic                                    |
+//+------------------------------------------------------------------+
+void TestMarginCalculatorBasic()
+{
+   Print("\n📊 TEST: MarginCalculator Basic");
+   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+   
+   string testSymbol = Symbol();
+   double testLots = 0.1;
+   
+   double required = g_marginCalc.GetRequiredMargin(testSymbol, testLots, ORDER_TYPE_BUY);
+   bool canOpen = g_marginCalc.CanOpenPosition(testSymbol, testLots, ORDER_TYPE_BUY);
+   
+   Print("✅ Required Margin: ", DoubleToString(required, 2), " USD");
+   Print("✅ Can Open: ", canOpen ? "YES" : "NO");
+}
+
+//+------------------------------------------------------------------+
+//| Test AssetDetector Basic                                       |
+//+------------------------------------------------------------------+
+void TestAssetDetectorBasic()
+{
+   Print("\n🔍 TEST: AssetDetector Basic");
+   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+   
+   string testSymbol = Symbol();
+   
+   AssetInfo info = g_assetDetector.DetectAsset(testSymbol);
+   
+   Print("✅ Asset Type: ", AssetTypeToString(info.type));
+   Print("✅ Base Symbol: ", info.baseSymbol);
+   Print("✅ Quote Symbol: ", info.quoteSymbol);
+   Print("✅ Point Value: ", DoubleToString(info.pointValue, 4));
+}
+
+//+------------------------------------------------------------------+
+//| Test RiskManager Basic                                         |
+//+------------------------------------------------------------------+
+void TestRiskManagerBasic()
+{
+   Print("\n🎯 TEST: RiskManager Basic");
+   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+   
+   string testSymbol = Symbol();
+   double riskPercent = 0.5;
+   double stopLossPoints = 200; // 20 pips for most forex pairs
+   
+   double lots = g_riskManager.CalculateLotsForRisk(testSymbol, riskPercent, stopLossPoints);
+   double riskAmount = g_riskManager.CalculateRiskAmount(riskPercent);
+   
+   Print("✅ Risk Amount: ", DoubleToString(riskAmount, 2), " USD");
+   Print("✅ Calculated Lots: ", DoubleToString(lots, 3));
+}
+
+//+------------------------------------------------------------------+
+//| Test System Integration                                        |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| ✅ FIXED: Integration Test (in BreakoutEA.mq5)                |
+//+------------------------------------------------------------------+
+void TestSystemIntegration()
+{
+   Print("\n🔗 TEST: System Integration");
+   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+   
+   string testSymbol = Symbol();
+   
+   // Test integration: AssetDetector → RiskManager
+   AssetType detectedType = g_assetDetector.GetAssetType(testSymbol);
+   double pointValue = g_riskManager.GetPointValue(testSymbol);
+   
+   Print("✅ Detected Asset Type: ", AssetTypeToString(detectedType));
+   Print("✅ Point Value (via RiskManager): ", DoubleToString(pointValue, 4));
+   
+   // ✅ FIX: Test scenario REALISTICO invece di lotti fissi
+   MqlTick tick;
+   if(SymbolInfoTick(testSymbol, tick))
+   {
+      // ✅ Usa prezzi reali per calcolo SL corretto
+      double entryPrice = tick.ask;
+      double stopLoss = tick.ask - (20 * SymbolInfoDouble(testSymbol, SYMBOL_POINT)); // 20 punti SL
+      double riskPercent = 0.5; // 0.5% come configurato
+      
+      PositionSizeInfo posInfo = g_riskManager.CalculatePositionSize(testSymbol, entryPrice, stopLoss, riskPercent);
+      
+      if(posInfo.isValid)
+      {
+         Print("✅ Integration Test SUCCESS:");
+         Print("  📦 Position Size: ", DoubleToString(posInfo.totalLots, 3), " lots");
+         Print("  💵 Risk Amount: ", DoubleToString(posInfo.riskAmount, 2), " USD");
+         Print("  📏 SL Points: ", DoubleToString(posInfo.stopLossPoints, 1));
+         Print("  📊 Entry: ", DoubleToString(entryPrice, _Digits));
+         Print("  🛑 Stop Loss: ", DoubleToString(stopLoss, _Digits));
+      }
+      else
+      {
+         Print("❌ Integration Test FAILED: ", posInfo.errorReason);
+      }
+   }
+   else
+   {
+      Print("❌ Cannot get current price for integration test");
+   }
+}
+
+// ============================================================================
+// EXISTING FUNCTIONS (mantenuti invariati)
+// ============================================================================
 
 //+------------------------------------------------------------------+
 //| Log configurazione sessioni                                    |
@@ -458,746 +686,99 @@ string GetDeinitReasonText(const int reason)
    }
 }
 
+
 //+------------------------------------------------------------------+
-//| TEST COMPLETO MARGIN CALCULATOR - Sostituisci nel OnInit()     |
+//| 🔍 BROKER & SYMBOL DEBUG INFO                                  |
 //+------------------------------------------------------------------+
-void TestMarginCalculatorComplete()
+
+void LogBrokerAndSymbolInfo()
 {
-   Print("\n");
-   Print("🧪 ===============================================");
-   Print("🧪 MARGIN CALCULATOR COMPLETE TEST SUITE");
-   Print("🧪 ===============================================");
+   Print("=== BROKER INFORMATION ===");
+   Print("Broker Name: ", AccountInfoString(ACCOUNT_COMPANY));
+   Print("Account Number: ", AccountInfoInteger(ACCOUNT_LOGIN));
+   Print("Account Currency: ", AccountInfoString(ACCOUNT_CURRENCY));
+   Print("Account Leverage: ", AccountInfoInteger(ACCOUNT_LEVERAGE));
+   Print("Account Balance: ", AccountInfoDouble(ACCOUNT_BALANCE));
+   Print("Server Name: ", AccountInfoString(ACCOUNT_SERVER));
    
-   // Inizializza MarginCalculator
-   g_marginCalc = new MarginCalculator();
-   if(g_marginCalc == NULL)
-   {
-      Print("❌ CRITICAL: Failed to create MarginCalculator");
-      return;
-   }
+   Print("\n=== DAX40 SYMBOL INFORMATION ===");
+   string symbol = "DAX40";
    
-   // Configura safety settings
-   g_marginCalc.SetSafetyMarginPercent(20.0);
-   g_marginCalc.SetMaxMarginUtilization(80.0);
+   // Basic Info
+   Print("Symbol: ", symbol);
+   Print("Description: ", SymbolInfoString(symbol, SYMBOL_DESCRIPTION));
+   Print("Currency Base: ", SymbolInfoString(symbol, SYMBOL_CURRENCY_BASE));
+   Print("Currency Profit: ", SymbolInfoString(symbol, SYMBOL_CURRENCY_PROFIT));
+   Print("Currency Margin: ", SymbolInfoString(symbol, SYMBOL_CURRENCY_MARGIN));
    
-   Print("✅ MarginCalculator initialized with Safety: ", g_marginCalc.GetSafetyMarginPercent(), "%");
+   // Trading Info
+   Print("Contract Size: ", SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE));
+   Print("Tick Size: ", SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE));
+   Print("Tick Value: ", SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE));
+   Print("Point: ", SymbolInfoDouble(symbol, SYMBOL_POINT));
+   Print("Digits: ", SymbolInfoInteger(symbol, SYMBOL_DIGITS));
    
-   // 1. TEST ACCOUNT INFO
-   TestAccountInformation();
+   // Volume Info
+   Print("Volume Min: ", SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN));
+   Print("Volume Max: ", SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX));
+   Print("Volume Step: ", SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP));
    
-   // 2. TEST MULTI-SYMBOL
-   TestMultipleSymbols();
+   // Margin Info
+   Print("Margin Initial: ", SymbolInfoDouble(symbol, SYMBOL_MARGIN_INITIAL));
+   Print("Margin Maintenance: ", SymbolInfoDouble(symbol, SYMBOL_MARGIN_MAINTENANCE));
    
-   // 3. TEST POSITION SIZING
-   TestPositionSizing();
-   
-   // 4. TEST MARGIN ANALYSIS
-   TestMarginAnalysis();
-   
-   // 5. TEST ASSET DETECTION
-   TestAssetDetection();
-   
-   // 6. TEST ERROR HANDLING
-   TestErrorHandling();
-   
-   // 7. TEST PERFORMANCE
-   TestPerformance();
-   
-   Print("🧪 ===============================================");
-   Print("🧪 MARGIN CALCULATOR TEST SUITE COMPLETED");
-   Print("🧪 ===============================================");
-   Print("\n");
-}
-
-//+------------------------------------------------------------------+
-//| Test 1: Account Information                                     |
-//+------------------------------------------------------------------+
-void TestAccountInformation()
-{
-   Print("\n📊 TEST 1: ACCOUNT INFORMATION");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double margin = AccountInfoDouble(ACCOUNT_MARGIN);
-   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-   double marginLevel = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
-   int leverage = (int)AccountInfoInteger(ACCOUNT_LEVERAGE);
-   string currency = AccountInfoString(ACCOUNT_CURRENCY);
-   
-   Print("💰 Balance: ", DoubleToString(balance, 2), " ", currency);
-   Print("💎 Equity: ", DoubleToString(equity, 2), " ", currency);
-   Print("🔒 Used Margin: ", DoubleToString(margin, 2), " ", currency);
-   Print("🆓 Free Margin: ", DoubleToString(freeMargin, 2), " ", currency);
-   Print("📈 Margin Level: ", DoubleToString(marginLevel, 2), "%");
-   Print("⚡ Leverage: 1:", leverage);
-   
-   // Test MarginCalculator method
-   double availableFromCalc = g_marginCalc.GetAvailableMargin();
-   Print("🧮 Available (Calc): ", DoubleToString(availableFromCalc, 2), " ", currency);
-   
-   if(MathAbs(availableFromCalc - freeMargin) < 0.01)
-      Print("✅ Available margin calculation: CORRECT");
-   else
-      Print("❌ Available margin calculation: MISMATCH!");
-}
-
-//+------------------------------------------------------------------+
-//| Test 2: Multiple Symbols                                       |
-//+------------------------------------------------------------------+
-void TestMultipleSymbols()
-{
-   Print("\n🌍 TEST 2: MULTIPLE SYMBOLS");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   string symbols[] = {"EURUSD", "GBPUSD", "USDJPY", "DAX40", "SP500", "BTCUSD", "XAUUSD"};
-   double testLots = 0.1;
-   
-   for(int i = 0; i < ArraySize(symbols); i++)
-   {
-      string symbol = symbols[i];
-      
-      Print("\n🔍 Testing: ", symbol);
-      
-      // Test asset detection
-      AssetInfo info = g_marginCalc.GetAssetInfo(symbol);
-      Print("  📋 Type: ", AssetTypeToString(info.type));
-      Print("  📏 Contract Size: ", DoubleToString(info.contractSize, 0));
-      Print("  🎯 Digits: ", info.digits);
-      
-      // Test margin calculation
-      double required = g_marginCalc.GetRequiredMargin(symbol, testLots, ORDER_TYPE_BUY);
-      if(required > 0)
-      {
-         Print("  💵 Required Margin: ", DoubleToString(required, 2), " USD");
-         
-         // Test can open
-         bool canOpen = g_marginCalc.CanOpenPosition(symbol, testLots, ORDER_TYPE_BUY);
-         Print("  ✅ Can Open: ", canOpen ? "YES" : "NO");
-         
-         // Test max lots
-         double maxLots = g_marginCalc.CalculateMaxLotsForMargin(symbol, ORDER_TYPE_BUY, 50.0);
-         Print("  📊 Max Lots (50%): ", DoubleToString(maxLots, 2));
-      }
-      else
-      {
-         Print("  ❌ Failed to calculate margin for ", symbol);
-         Print("  📝 Error: ", g_marginCalc.GetLastError());
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Test 3: Position Sizing                                        |
-//+------------------------------------------------------------------+
-void TestPositionSizing()
-{
-   Print("\n📏 TEST 3: POSITION SIZING");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   string testSymbol = Symbol(); // Simbolo attuale
-   double testSizes[] = {0.01, 0.1, 0.5, 1.0, 2.0, 5.0};
-   
-   Print("🎯 Testing position sizes for: ", testSymbol);
-   
-   for(int i = 0; i < ArraySize(testSizes); i++)
-   {
-      double lots = testSizes[i];
-      
-      Print("\n📦 Testing ", DoubleToString(lots, 2), " lots:");
-      
-      double required = g_marginCalc.GetRequiredMargin(testSymbol, lots, ORDER_TYPE_BUY);
-      if(required > 0)
-      {
-         double utilization = g_marginCalc.GetMarginUtilizationPercent(testSymbol, lots, ORDER_TYPE_BUY);
-         bool canOpen = g_marginCalc.CanOpenPosition(testSymbol, lots, ORDER_TYPE_BUY);
-         
-         Print("  💵 Required: ", DoubleToString(required, 2), " USD");
-         Print("  📊 Utilization: ", DoubleToString(utilization, 1), "%");
-         Print("  ✅ Can Open: ", canOpen ? "YES" : "NO");
-         
-         if(utilization > 100.0)
-            Print("  ⚠️  WARNING: Exceeds available margin!");
-      }
-      else
-      {
-         Print("  ❌ Calculation failed");
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Test 4: Margin Analysis                                        |
-//+------------------------------------------------------------------+
-void TestMarginAnalysis()
-{
-   Print("\n🔬 TEST 4: MARGIN ANALYSIS");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   string testSymbol = Symbol();
-   double testLots = 1.0;
-   
-   MarginInfo analysis = g_marginCalc.GetMarginAnalysis(testSymbol, testLots, ORDER_TYPE_BUY);
-   
-   Print("🎯 Analysis for ", DoubleToString(testLots, 2), " lots of ", testSymbol, ":");
-   Print("  💵 Required Margin: ", DoubleToString(analysis.requiredMargin, 2), " USD");
-   Print("  🆓 Available Margin: ", DoubleToString(analysis.availableMargin, 2), " USD");
-   Print("  📊 Utilization: ", DoubleToString(analysis.utilizationPercent, 1), "%");
-   Print("  📈 Margin Level: ", DoubleToString(analysis.marginLevel, 2), "%");
-   Print("  ✅ Can Open: ", analysis.canOpenPosition ? "YES" : "NO");
-   
-   if(!analysis.canOpenPosition && analysis.limitReason != "")
-   {
-      Print("  ⚠️  Reason: ", analysis.limitReason);
-   }
-   
-   // Test graduali incrementi
-   Print("\n📈 Testing graduated increases:");
-   double testPercents[] = {10.0, 25.0, 50.0, 75.0, 90.0};
-   
-   for(int i = 0; i < ArraySize(testPercents); i++)
-   {
-      double percent = testPercents[i];
-      double maxLots = g_marginCalc.CalculateMaxLotsForMargin(testSymbol, ORDER_TYPE_BUY, percent);
-      
-      Print("  ", DoubleToString(percent, 0), "% margin → Max lots: ", DoubleToString(maxLots, 3));
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Test 5: Asset Detection                                        |
-//+------------------------------------------------------------------+
-void TestAssetDetection()
-{
-   Print("\n🔍 TEST 5: ASSET DETECTION");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   // Test diversi pattern di simboli
-   string testSymbols[] = {
-      "EURUSD",     // Forex
-      "GBPJPY",     // Forex
-      "DAX40",      // Index  
-      "SPX500",     // Index
-      "NAS100",     // Index
-      "BTCUSD",     // Crypto
-      "ETHUSD",     // Crypto
-      "XAUUSD",     // Commodity (Gold)
-      "XAGUSD",     // Commodity (Silver)
-      "CRUDE",      // Commodity (Oil)
-      "UNKNOWN123"  // Unknown
-   };
-   
-   for(int i = 0; i < ArraySize(testSymbols); i++)
-   {
-      string symbol = testSymbols[i];
-      AssetInfo info = g_marginCalc.GetAssetInfo(symbol);
-      
-      Print("📋 ", symbol, " → Type: ", AssetTypeToString(info.type));
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Test 6: Error Handling                                         |
-//+------------------------------------------------------------------+
-void TestErrorHandling()
-{
-   Print("\n🛡️ TEST 6: ERROR HANDLING");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   // Test simbolo vuoto
-   double result1 = g_marginCalc.GetRequiredMargin("", 1.0, ORDER_TYPE_BUY);
-   Print("Empty symbol result: ", result1, " | Error: ", g_marginCalc.GetLastError());
-   
-   // Test lotti negativi
-   double result2 = g_marginCalc.GetRequiredMargin("EURUSD", -1.0, ORDER_TYPE_BUY);
-   Print("Negative lots result: ", result2, " | Error: ", g_marginCalc.GetLastError());
-   
-   // Test lotti zero
-   double result3 = g_marginCalc.GetRequiredMargin("EURUSD", 0.0, ORDER_TYPE_BUY);
-   Print("Zero lots result: ", result3, " | Error: ", g_marginCalc.GetLastError());
-   
-   // Test simbolo inesistente
-   double result4 = g_marginCalc.GetRequiredMargin("FAKESYMBOL", 1.0, ORDER_TYPE_BUY);
-   Print("Fake symbol result: ", result4, " | Error: ", g_marginCalc.GetLastError());
-   
-   Print("✅ Error handling tests completed");
-}
-
-//+------------------------------------------------------------------+
-//| Test 7: Performance                                            |
-//+------------------------------------------------------------------+
-void TestPerformance()
-{
-   Print("\n⚡ TEST 7: PERFORMANCE");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   string testSymbol = Symbol();
-   int iterations = 1000;
-   
-   // Test performance calcoli multipli
-   uint startTime = GetTickCount();
-   
-   for(int i = 0; i < iterations; i++)
-   {
-      double required = g_marginCalc.GetRequiredMargin(testSymbol, 0.1, ORDER_TYPE_BUY);
-      bool canOpen = g_marginCalc.CanOpenPosition(testSymbol, 0.1, ORDER_TYPE_BUY);
-   }
-   
-   uint endTime = GetTickCount();
-   uint duration = endTime - startTime;
-   
-   Print("🔥 Performance test: ", iterations, " calculations in ", duration, " ms");
-   Print("⚡ Average: ", DoubleToString((double)duration/iterations, 2), " ms per calculation");
-   
-   // Test cache effectiveness
-   Print("\n💾 Testing cache effectiveness:");
-   
-   startTime = GetTickCount();
-   for(int i = 0; i < 100; i++)
-   {
-      AssetInfo info = g_marginCalc.GetAssetInfo(testSymbol); // Dovrebbe usare cache
-   }
-   endTime = GetTickCount();
-   
-   Print("📈 100 cached AssetInfo calls: ", (endTime - startTime), " ms");
-   
-   // Clear cache e ri-test
-   g_marginCalc.ClearCache();
-   
-   startTime = GetTickCount();
-   AssetInfo info = g_marginCalc.GetAssetInfo(testSymbol); // Primo call, no cache
-   endTime = GetTickCount();
-   
-   Print("🔄 First call (no cache): ", (endTime - startTime), " ms");
-}
-
-//+------------------------------------------------------------------+
-//| Cleanup test resources - Aggiungi nel OnDeinit()              |
-//+------------------------------------------------------------------+
-void CleanupMarginCalculatorTest()
-{
-   if(g_marginCalc != NULL)
-   {
-      delete g_marginCalc;
-      g_marginCalc = NULL;
-      Print("🧪 MarginCalculator test resources cleaned up");
-   }
-}
-
-// ============================================================================
-// 🧪 FINE TEST MARGIN CALCULATOR - RIMUOVI TUTTO DOPO VALIDAZIONE
-// ============================================================================
-
-// ISTRUZIONI PER USARE IL TEST:
-// 1. Sostituisci la sezione "Test base" nel OnInit() con: TestMarginCalculatorComplete();
-// 2. Aggiungi nel OnDeinit(): CleanupMarginCalculatorTest();
-// 3. Compila e testa su demo
-// 4. Una volta validato, rimuovi tutto questo codice di test
-
-
-// ============================================================================
-// 🧪TEST MARGIN CALCULATOR - RIMUOVI TUTTO DOPO VALIDAZIONE
-// ============================================================================
-// 3. AGGIUNGI FUNZIONE DI INIZIALIZZAZIONE:
-//+------------------------------------------------------------------+
-//| Inizializza RiskManager                                         |
-//+------------------------------------------------------------------+
-bool InitializeRiskManager()
-{
-   g_riskManager = new RiskManager();
-   if(g_riskManager == NULL) 
-   {
-      Print("ERROR: Failed to create RiskManager");
-      return false;
-   }
-   
-   // Inizializza con MarginCalculator (assumendo che g_marginCalc esista)
-   if(!g_riskManager.Initialize(g_marginCalc))
-   {
-      Print("ERROR: RiskManager initialization failed - ", g_riskManager.GetLastError());
-      return false;
-   }
-   
-   // Configura parametri
-   g_riskManager.SetMaxRiskPerTrade(2.0);        // Max 2% per trade
-   g_riskManager.SetMaxMarginUtilization(80.0);  // Max 80% margine
-   g_riskManager.SetUseEquityForRisk(false);     // Usa balance, non equity
-   
-   Print("✅ RiskManager initialized successfully");
-   return true;
-}
-
-// 5. SOSTITUISCI I TEST COMMENTATI CON QUESTO TEST COMPLETO:
-//+------------------------------------------------------------------+
-//| 🧪 TEST RISK MANAGER - DA RIMUOVERE DOPO VALIDAZIONE           |
-//+------------------------------------------------------------------+
-void TestRiskManagerComplete()
-{
-   Print("\n");
-   Print("🧪 ===============================================");
-   Print("🧪 RISK MANAGER COMPLETE TEST SUITE");
-   Print("🧪 ===============================================");
-   
-   if(g_riskManager == NULL)
-   {
-      Print("❌ CRITICAL: RiskManager not initialized");
-      return;
-   }
-   
-   // TEST 1: Account Info
-   TestRiskManagerAccountInfo();
-   
-   // TEST 2: Position Sizing - Scenario Reale
-   TestRiskManagerPositionSizing();
-   
-   // TEST 3: Multi-Asset
-   TestRiskManagerMultiAsset();
-   
-   // TEST 4: Multi-Target Calculation  
-   TestRiskManagerMultiTargets();
-   
-   // TEST 5: Error Handling
-   TestRiskManagerErrorHandling();
-   
-   Print("🧪 ===============================================");
-   Print("🧪 RISK MANAGER TEST SUITE COMPLETED");
-   Print("🧪 ===============================================");
-   Print("\n");
-}
-
-//+------------------------------------------------------------------+
-//| Test 1: Account Information                                     |
-//+------------------------------------------------------------------+
-void TestRiskManagerAccountInfo()
-{
-   Print("\n💰 TEST 1: ACCOUNT INFO & RISK CALCULATION");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   double balance = g_riskManager.GetAccountBalance();
-   string currency = g_riskManager.GetAccountCurrency();
-   
-   Print("💰 Account Balance: ", DoubleToString(balance, 2), " ", currency);
-   Print("⚡ Max Risk Per Trade: ", g_riskManager.GetMaxRiskPerTrade(), "%");
-   
-   // Test calcolo risk amount
-   double risk05 = g_riskManager.CalculateRiskAmount(0.5);
-   double risk10 = g_riskManager.CalculateRiskAmount(1.0);
-   double risk20 = g_riskManager.CalculateRiskAmount(2.0);
-   
-   Print("💵 Risk 0.5%: ", DoubleToString(risk05, 2), " ", currency);
-   Print("💵 Risk 1.0%: ", DoubleToString(risk10, 2), " ", currency);
-   Print("💵 Risk 2.0%: ", DoubleToString(risk20, 2), " ", currency);
-}
-
-//+------------------------------------------------------------------+
-//| Test 2: Position Sizing - SCENARIO REALE                       |
-//+------------------------------------------------------------------+
-void TestRiskManagerPositionSizing()
-{
-   Print("\n🎯 TEST 2: POSITION SIZING - SCENARIO REALE");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   string testSymbol = Symbol(); // Simbolo attuale
-   double riskPercent = 0.5;     // 0.5% risk come nel tuo esempio
-   
-   Print("📊 Testing with current symbol: ", testSymbol);
-   Print("🎯 Risk percentage: ", riskPercent, "%");
-   
-   // Ottieni prezzo attuale
+   // Current Prices
    MqlTick tick;
-   if(!SymbolInfoTick(testSymbol, tick))
+   if(SymbolInfoTick(symbol, tick))
    {
-      Print("❌ Cannot get tick data for ", testSymbol);
-      return;
+      Print("Current Bid: ", tick.bid);
+      Print("Current Ask: ", tick.ask);
+      Print("Current Spread: ", (tick.ask - tick.bid) / SymbolInfoDouble(symbol, SYMBOL_POINT));
    }
    
-   // DETECIONE ASSET TYPE E CALCOLO OFFSET INTELLIGENTE
-   AssetInfo assetInfo = g_marginCalc.GetAssetInfo(testSymbol);
-   double point = SymbolInfoDouble(testSymbol, SYMBOL_POINT);
-   int digits = (int)SymbolInfoInteger(testSymbol, SYMBOL_DIGITS);
+   // ✅ CALCOLO POINT VALUE ALTERNATIVO
+   Print("\n=== ALTERNATIVE POINT VALUE CALCULATION ===");
+   double alternativePointValue = CalculateAlternativePointValue(symbol);
+   Print("Alternative Point Value: ", alternativePointValue);
    
-   Print("🔍 Asset detection:");
-   Print("  📋 Type: ", AssetTypeToString(assetInfo.type));
-   Print("  🎯 Digits: ", digits);
-   Print("  📏 Point: ", DoubleToString(point, 8));
-   Print("  💎 Current Ask: ", DoubleToString(tick.ask, digits));
+   // ✅ TEST CON I TUOI DATI REALI
+   Print("\n=== REAL TRADE VERIFICATION ===");
+   double yourLots = 10.55;
+   double yourRisk = 250.0;
+   double slPoints = 18.7;
+   double impliedPointValue = yourRisk / (yourLots * slPoints);
+   Print("Your Lots: ", yourLots);
+   Print("Your Risk: ", yourRisk, " USD");
+   Print("SL Points: ", slPoints);
+   Print("Implied Point Value: ", impliedPointValue, " USD per point");
+}
+
+//+------------------------------------------------------------------+
+//| 🧮 CALCOLO POINT VALUE ALTERNATIVO                             |
+//+------------------------------------------------------------------+
+double CalculateAlternativePointValue(string symbol)
+{
+   double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
    
-   // CALCOLO OFFSET DINAMICO BASATO SU ASSET TYPE
-   double entryOffset, slOffset;
+   Print("Raw Tick Value: ", tickValue);
+   Print("Raw Tick Size: ", tickSize);
+   Print("Raw Point: ", point);
    
-   switch(assetInfo.type)
+   // Se tick value è 0, prova calcolo alternativo
+   if(tickValue == 0)
    {
-      case ASSET_FOREX:
-         // Forex: 20-30 pips tipici
-         entryOffset = 20 * point;   // 20 pips sopra
-         slOffset = 37 * point;      // 37 pips sotto (come nel tuo esempio)
-         Print("  🌍 FOREX mode: Using pip-based offsets");
-         break;
-         
-      case ASSET_INDICES:
-         // Indici: 20-50 punti tipici  
-         entryOffset = 20.0;         // 20 punti sopra
-         slOffset = 37.0;            // 37 punti sotto (come nel tuo esempio)
-         Print("  📈 INDEX mode: Using point-based offsets");
-         break;
-         
-      case ASSET_CRYPTO:
-         // Crypto: percentuale del prezzo
-         entryOffset = tick.ask * 0.002;  // +0.2%
-         slOffset = tick.ask * 0.003;     // -0.3%
-         Print("  🪙 CRYPTO mode: Using percentage-based offsets");
-         break;
-         
-      case ASSET_COMMODITY:
-      {
-         // Commodity: basato su tick size
-         double tickSize = SymbolInfoDouble(testSymbol, SYMBOL_TRADE_TICK_SIZE);
-         entryOffset = tickSize * 20;     // 20 tick sopra
-         slOffset = tickSize * 37;        // 37 tick sotto
-         Print("  🥇 COMMODITY mode: Using tick-based offsets");
-      }  
-         break;
-      default:
-         // Fallback generico
-         entryOffset = tick.ask * 0.001;  // +0.1%
-         slOffset = tick.ask * 0.002;     // -0.2%
-         Print("  ❓ UNKNOWN mode: Using generic percentage offsets");
-         break;
-   }
-   
-   Print("  ⚙️ Entry Offset: ", DoubleToString(entryOffset, digits));
-   Print("  ⚙️ SL Offset: ", DoubleToString(slOffset, digits));
-   
-   // Test scenario BUY STOP
-   Print("\n🟢 BUY STOP SCENARIO:");
-   double buyEntry = tick.ask + entryOffset;
-   double buySL = tick.ask - slOffset;
-   
-   // Normalizza ai decimali del simbolo
-   buyEntry = NormalizeDouble(buyEntry, digits);
-   buySL = NormalizeDouble(buySL, digits);
-   
-   Print("  📈 Entry: ", DoubleToString(buyEntry, digits));
-   Print("  🛑 Stop Loss: ", DoubleToString(buySL, digits));
-   
-   // Verifica che entry != SL
-   if(MathAbs(buyEntry - buySL) < point)
-   {
-      Print("  ⚠️  WARNING: Entry and SL too close, adjusting...");
-      slOffset = entryOffset + (50 * point); // Forza distanza minima
-      buySL = NormalizeDouble(tick.ask - slOffset, digits);
-      Print("  🔧 Adjusted SL: ", DoubleToString(buySL, digits));
-   }
-   
-   // Calcola position size
-   PositionSizeInfo buyInfo = g_riskManager.CalculatePositionSize(testSymbol, buyEntry, buySL, riskPercent);
-   
-   if(buyInfo.isValid)
-   {
-      Print("  ✅ CALCULATION SUCCESS:");
-      Print("    📦 Lots: ", DoubleToString(buyInfo.totalLots, 3));
-      Print("    💵 Risk Amount: ", DoubleToString(buyInfo.riskAmount, 2), " USD");
-      Print("    📏 SL Points: ", DoubleToString(buyInfo.stopLossPoints, 1));
-      Print("    💎 Point Value: ", DoubleToString(buyInfo.pointValue, 4));
+      Print("Tick Value is 0 - trying alternative calculation...");
       
-      // Verifica rischio effettivo
-      double actualRisk = buyInfo.totalLots * buyInfo.stopLossPoints * buyInfo.pointValue;
-      Print("    ✔️  Actual Risk: ", DoubleToString(actualRisk, 2), " USD");
-      
-      double riskDifference = MathAbs(actualRisk - buyInfo.riskAmount);
-      bool riskMatch = riskDifference < 10.0; // Tolleranza 10 USD
-      Print("    ✔️  Risk Match: ", riskMatch ? "YES" : "NO", 
-            " (diff: ", DoubleToString(riskDifference, 2), " USD)");
+      // Per CFD EUR-based, spesso point value = 1 EUR = ~1.1 USD
+      double eurToUsd = 1.10; // Approssimativo
+      return eurToUsd; // 1 punto = 1 EUR ≈ 1.1 USD
    }
+   
+   // Calcolo normale
+   if(tickSize > 0)
+      return tickValue / tickSize * point;
    else
-   {
-      Print("  ❌ CALCULATION FAILED: ", buyInfo.errorReason);
-   }
-   
-   // Test scenario SELL STOP  
-   Print("\n🔴 SELL STOP SCENARIO:");
-   double sellEntry = tick.bid - entryOffset;
-   double sellSL = tick.bid + slOffset;
-   
-   // Normalizza
-   sellEntry = NormalizeDouble(sellEntry, digits);
-   sellSL = NormalizeDouble(sellSL, digits);
-   
-   Print("  📉 Entry: ", DoubleToString(sellEntry, digits));
-   Print("  🛑 Stop Loss: ", DoubleToString(sellSL, digits));
-   
-   PositionSizeInfo sellInfo = g_riskManager.CalculatePositionSize(testSymbol, sellEntry, sellSL, riskPercent);
-   
-   if(sellInfo.isValid)
-   {
-      Print("  ✅ CALCULATION SUCCESS:");
-      Print("    📦 Lots: ", DoubleToString(sellInfo.totalLots, 3));
-      Print("    💵 Risk Amount: ", DoubleToString(sellInfo.riskAmount, 2), " USD");
-      
-      // Confronta con scenario buy
-      double lotsDifference = MathAbs(buyInfo.totalLots - sellInfo.totalLots);
-      bool sameLots = lotsDifference < 0.001;
-      Print("    ⚖️  Same lots as BUY: ", sameLots ? "YES" : "NO",
-            " (diff: ", DoubleToString(lotsDifference, 3), ")");
-   }
-   else
-   {
-      Print("  ❌ CALCULATION FAILED: ", sellInfo.errorReason);
-   }
-   
-   // SUMMARY
-   Print("\n📊 TEST SUMMARY:");
-   Print("  🎯 Asset Type: ", AssetTypeToString(assetInfo.type));
-   Print("  📏 Distance Strategy: ", 
-         (assetInfo.type == ASSET_FOREX) ? "Pip-based" :
-         (assetInfo.type == ASSET_INDICES) ? "Point-based" :
-         (assetInfo.type == ASSET_CRYPTO) ? "Percentage-based" :
-         (assetInfo.type == ASSET_COMMODITY) ? "Tick-based" : "Generic");
-   Print("  ✅ Buy Success: ", buyInfo.isValid ? "YES" : "NO");
-   Print("  ✅ Sell Success: ", sellInfo.isValid ? "YES" : "NO");
-}
-
-//+------------------------------------------------------------------+
-//| Test 3: Multi-Asset Testing                                    |
-//+------------------------------------------------------------------+
-void TestRiskManagerMultiAsset()
-{
-   Print("\n🌍 TEST 3: MULTI-ASSET TESTING");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   string symbols[] = {"EURUSD", "GBPUSD", "USDJPY"};
-   double riskPercent = 0.5;
-   double testSLPoints = 200; // 20 pips for forex
-   
-   for(int i = 0; i < ArraySize(symbols); i++)
-   {
-      string symbol = symbols[i];
-      Print("\n🔍 Testing: ", symbol);
-      
-      // Test calcolo lotti
-      double lots = g_riskManager.CalculateLotsForRisk(symbol, riskPercent, testSLPoints);
-      
-      if(lots > 0)
-      {
-         Print("  ✅ Lots for ", riskPercent, "% risk: ", DoubleToString(lots, 3));
-         
-         // Test point value
-         double pointValue = g_riskManager.GetPointValue(symbol);
-         Print("  📊 Point Value: ", DoubleToString(pointValue, 4));
-         
-         // Test lot constraints
-         double minLot = g_riskManager.GetMinLotSize(symbol);
-         double maxLot = g_riskManager.GetMaxLotSize(symbol);
-         double stepLot = g_riskManager.GetLotStep(symbol);
-         
-         Print("  📏 Lot Constraints: Min=", DoubleToString(minLot, 3), 
-               " Max=", DoubleToString(maxLot, 0), " Step=", DoubleToString(stepLot, 3));
-      }
-      else
-      {
-         Print("  ❌ Failed: ", g_riskManager.GetLastError());
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Test 4: Multi-Target Calculation                               |
-//+------------------------------------------------------------------+
-void TestRiskManagerMultiTargets()
-{
-   Print("\n🎯 TEST 4: MULTI-TARGET CALCULATION");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   string testSymbol = Symbol();
-   
-   // Ottieni prezzo corrente
-   MqlTick tick;
-   if(!SymbolInfoTick(testSymbol, tick)) return;
-   
-   // STESSO SISTEMA DI OFFSET INTELLIGENTE
-   AssetInfo assetInfo = g_marginCalc.GetAssetInfo(testSymbol);
-   double point = SymbolInfoDouble(testSymbol, SYMBOL_POINT);
-   int digits = (int)SymbolInfoInteger(testSymbol, SYMBOL_DIGITS);
-   
-   double entryOffset, slOffset;
-   
-   switch(assetInfo.type)
-   {
-      case ASSET_FOREX:
-         entryOffset = 20 * point;
-         slOffset = 37 * point;
-         break;
-      case ASSET_INDICES:
-         entryOffset = 20.0;
-         slOffset = 37.0;
-         break;
-      case ASSET_CRYPTO:
-         entryOffset = tick.ask * 0.002;
-         slOffset = tick.ask * 0.003;
-         break;
-      case ASSET_COMMODITY:
-      {
-         double tickSize = SymbolInfoDouble(testSymbol, SYMBOL_TRADE_TICK_SIZE);
-         entryOffset = tickSize * 20;
-         slOffset = tickSize * 37;
-      }
-         break;
-      default:
-         entryOffset = tick.ask * 0.001;
-         slOffset = tick.ask * 0.002;
-         break;
-   }
-   
-   double entryPrice = NormalizeDouble(tick.ask + entryOffset, digits);
-   double stopLoss = NormalizeDouble(tick.ask - slOffset, digits);
-   
-   // Configura parametri strategia
-   RiskParameters params;
-   params.riskPercentage = 0.5;
-   params.tp1RiskReward = 1.8;
-   params.tp2RiskReward = 3.0;
-   params.tp1VolumePercent = 50.0;
-   params.tp2VolumePercent = 50.0;
-   params.breakEvenAfterTP1 = true;
-   
-   Print("🎯 Multi-target scenario for: ", testSymbol, " (", AssetTypeToString(assetInfo.type), ")");
-   Print("  📈 Entry: ", DoubleToString(entryPrice, digits));
-   Print("  🛑 Stop Loss: ", DoubleToString(stopLoss, digits));
-   Print("  📏 Distance: ", DoubleToString(MathAbs(entryPrice - stopLoss), digits));
-   Print("  📊 TP1: ", params.tp1RiskReward, "R (", params.tp1VolumePercent, "%)");
-   Print("  📊 TP2: ", params.tp2RiskReward, "R (", params.tp2VolumePercent, "%)");
-   
-   MultiTargetInfo targets = g_riskManager.CalculateMultiTargets(testSymbol, entryPrice, stopLoss, params);
-   
-   Print("  ✅ RESULTS:");
-   Print("    🎯 TP1 Price: ", DoubleToString(targets.tp1Price, digits), " (", DoubleToString(targets.tp1Lots, 3), " lots)");
-   Print("    🎯 TP2 Price: ", DoubleToString(targets.tp2Price, digits), " (", DoubleToString(targets.tp2Lots, 3), " lots)");
-   Print("    📦 Remaining: ", DoubleToString(targets.remainingLots, 3), " lots");
-}
-
-//+------------------------------------------------------------------+
-//| Test 5: Error Handling                                         |
-//+------------------------------------------------------------------+
-void TestRiskManagerErrorHandling()
-{
-   Print("\n🛡️ TEST 5: ERROR HANDLING");
-   Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-   
-   // Test simbolo vuoto
-   double result1 = g_riskManager.CalculateLotsForRisk("", 0.5, 100);
-   Print("Empty symbol: ", result1, " | Error: ", g_riskManager.GetLastError());
-   
-   // Test rischio eccessivo
-   double result2 = g_riskManager.CalculateLotsForRisk("EURUSD", 5.0, 100);
-   Print("Excessive risk (5%): ", result2, " | Error: ", g_riskManager.GetLastError());
-   
-   // Test SL zero
-   double result3 = g_riskManager.CalculateLotsForRisk("EURUSD", 0.5, 0);
-   Print("Zero SL points: ", result3, " | Error: ", g_riskManager.GetLastError());
-   
-   // Test rischio negativo
-   double result4 = g_riskManager.CalculateLotsForRisk("EURUSD", -0.5, 100);
-   Print("Negative risk: ", result4, " | Error: ", g_riskManager.GetLastError());
-   
-   Print("✅ Error handling tests completed");
+      return tickValue;
 }

@@ -83,6 +83,29 @@ struct TPLevel
 };
 
 //+------------------------------------------------------------------+
+//| ✅ NUOVO: Asset Information (spostata qui per condivisione)    |
+//+------------------------------------------------------------------+
+struct AssetInfo
+{
+    AssetType type;             // Tipo asset (Forex, Index, Crypto, etc.)
+    double contractSize;        // Contract size
+    double tickSize;            // Tick size minimo
+    double tickValue;           // Valore monetario per tick
+    double marginRate;          // Tasso margin requirement
+    string baseQuoteCurrency;   // Valuta base/quote
+    int digits;                 // Decimali prezzo
+    
+    // ✅ CAMPI AGGIUNTIVI per AssetDetector
+    string baseSymbol;          // Simbolo base (es. EUR)
+    string quoteSymbol;         // Simbolo quote (es. USD)  
+    double pointValue;          // Point value in USD
+    
+    AssetInfo() : type(ASSET_UNKNOWN), contractSize(0), tickSize(0), 
+                  tickValue(0), marginRate(0), baseQuoteCurrency(""), digits(0),
+                  baseSymbol(""), quoteSymbol(""), pointValue(0) {}
+};
+
+//+------------------------------------------------------------------+
 //| Costanti Essenziali                                            |
 //+------------------------------------------------------------------+
 

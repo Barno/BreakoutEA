@@ -9,6 +9,7 @@
 
 #include "Enums.mqh"
 #include "MarginCalculator.mqh"
+#include "AssetDetector.mqh"
 
 //+------------------------------------------------------------------+
 //| Strutture per Risk Management                                   |
@@ -73,6 +74,8 @@ class RiskManager : public IRiskManager
 private:
     string m_lastError;                    // Ultimo errore
     MarginCalculator* m_marginCalc;        // Riferimento a MarginCalculator
+    AssetDetector* m_assetDetector;  // ✅ Dependency Injection
+
     double m_accountBalance;               // Balance account
     string m_accountCurrency;              // Valuta account
     
@@ -81,15 +84,20 @@ private:
     double m_maxMarginUtilization;         // Max utilizzo margine %
     bool m_useEquityForRisk;               // Usa equity invece di balance
     
+    
 public:
     RiskManager();
     ~RiskManager();
     
     // Initialization
+    // ✅ OVERLOAD METHODS per backward compatibility
     bool Initialize(MarginCalculator* marginCalculator);
+    bool Initialize(MarginCalculator* marginCalculator, AssetDetector* assetDetector);
+
     
-    // Main Interface Implementation (IRiskManager)
+    // Main Interface Implementation (IRiskManager)    
     virtual double CalculateLotsForRisk(const string symbol, double riskPercent, double stopLossPoints) override;
+
     virtual PositionSizeInfo CalculatePositionSize(const string symbol, double entryPrice, double stopLoss, double riskPercent) override;
     virtual MultiTargetInfo CalculateMultiTargets(const string symbol, double entryPrice, double stopLoss, const RiskParameters& params) override;
     virtual bool ValidatePositionRisk(const string symbol, double lots, double stopLossPoints) override;
@@ -127,6 +135,8 @@ public:
 private:
     // Core Calculation Methods
     double CalculateStopLossPoints(double entryPrice, double stopLoss, const string symbol);
+
+    // GetAssetType con fallback
     AssetType GetAssetType(const string symbol);
     
     // Validation & Error Handling
@@ -138,6 +148,9 @@ private:
     // Utility Methods
     double RoundToLotStep(const string symbol, double lots);
     double ApplySafetyMargin(double calculatedLots, const string symbol);
+
+    // GetPointValue con fallback  
+    double GetPointValueInternal(const string symbol);
 };
 
 //+------------------------------------------------------------------+
@@ -166,9 +179,12 @@ RiskManager::~RiskManager()
 //+------------------------------------------------------------------+
 //| Inizializza RiskManager                                         |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| ✅ Initialize BACKWARD COMPATIBLE (senza AssetDetector)        |
+//+------------------------------------------------------------------+
 bool RiskManager::Initialize(MarginCalculator* marginCalculator)
 {
-    Print("RiskManager: Initializing with MarginCalculator...");
+    Print("RiskManager: Initializing with MarginCalculator only (backward compatible)...");
     
     if(marginCalculator == NULL)
     {
@@ -177,8 +193,50 @@ bool RiskManager::Initialize(MarginCalculator* marginCalculator)
     }
     
     m_marginCalc = marginCalculator;
+    m_assetDetector = NULL;  // ✅ Esplicitamente NULL
     
-    // Aggiorna info account
+    UpdateAccountInfo();
+    
+    if(m_accountBalance <= 0)
+    {
+        SetError("Invalid account balance");
+        return false;
+    }
+    
+    Print("RiskManager: Initialized successfully (backward compatible mode)");
+    Print("Account Balance: ", DoubleToString(m_accountBalance, 2), " ", m_accountCurrency);
+    Print("Max Risk Per Trade: ", m_maxRiskPerTrade, "%");
+    Print("Max Margin Utilization: ", m_maxMarginUtilization, "%");
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| ✅ Initialize CON AssetDetector (nuovo)                        |
+//+------------------------------------------------------------------+
+bool RiskManager::Initialize(MarginCalculator* marginCalculator, AssetDetector* assetDetector)
+{
+    Print("RiskManager: Initializing with MarginCalculator + AssetDetector...");
+    
+    if(marginCalculator == NULL)
+    {
+        SetError("MarginCalculator reference is NULL");
+        return false;
+    }
+    
+    m_marginCalc = marginCalculator;
+    m_assetDetector = assetDetector;  // ✅ Può essere NULL
+    
+    // Log AssetDetector status
+    if(m_assetDetector != NULL)
+    {
+        Print("RiskManager: AssetDetector integration ENABLED");
+    }
+    else
+    {
+        Print("RiskManager: AssetDetector integration DISABLED (fallback to MarginCalculator)");
+    }
+    
     UpdateAccountInfo();
     
     if(m_accountBalance <= 0)
@@ -384,6 +442,25 @@ double RiskManager::CalculateRiskAmount(double riskPercent)
 //+------------------------------------------------------------------+
 double RiskManager::GetPointValue(const string symbol)
 {
+    // ✅ PREFERENZA: Usa AssetDetector se disponibile
+    if(m_assetDetector != NULL)
+    {
+        double pointValue = m_assetDetector.GetPointValue(symbol);
+        if(pointValue > 0)
+        {
+            return pointValue;
+        }
+    }
+    
+    // ✅ FALLBACK: Usa logica esistente
+    return GetPointValueInternal(symbol);
+}
+
+//+------------------------------------------------------------------+
+//| ✅ RINOMINATO: Logica esistente come fallback                  |
+//+------------------------------------------------------------------+
+double RiskManager::GetPointValueInternal(const string symbol)
+{
     AssetType assetType = GetAssetType(symbol);
     
     switch(assetType)
@@ -516,7 +593,13 @@ double RiskManager::CalculateStopLossPoints(double entryPrice, double stopLoss, 
 
 AssetType RiskManager::GetAssetType(const string symbol)
 {
-    // Usa MarginCalculator per rilevare tipo asset
+    // ✅ PREFERENZA: Usa AssetDetector se disponibile
+    if(m_assetDetector != NULL)
+    {
+        return m_assetDetector.GetAssetType(symbol);
+    }
+    
+    // ✅ FALLBACK: Usa MarginCalculator come prima
     if(m_marginCalc != NULL)
     {
         AssetInfo info = m_marginCalc.GetAssetInfo(symbol);
