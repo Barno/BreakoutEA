@@ -70,6 +70,8 @@ input bool LogSystemHealth = true;              // Log stato sistema
 ConfigManager* g_configManager = NULL;
 ChartVisualizer* g_chartVisualizer = NULL;
 TelegramLogger* g_telegramLogger = NULL;
+MarginCalculator* calc = new MarginCalculator();
+
 
 bool g_isInitialized = false;
 datetime g_lastVisualizationUpdate = 0;
@@ -129,6 +131,20 @@ int OnInit()
    }
 
    string serverTime = TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES);
+
+
+   // Test base
+double required = calc.GetRequiredMargin("EURUSD", 0.1, ORDER_TYPE_BUY);
+bool canOpen = calc.CanOpenPosition("EURUSD", 0.1, ORDER_TYPE_BUY);
+
+// Test avanzato
+MarginInfo analysis = calc.GetMarginAnalysis("DAX40", 0.1, ORDER_TYPE_BUY);
+double maxLots = calc.CalculateMaxLotsForMargin("EURUSD", ORDER_TYPE_BUY, 80.0);
+
+// Debug output
+Print("Required: ", required, " | Can Open: ", canOpen);
+Print("Max Lots for 80% margin: ", maxLots);
+
    g_telegramLogger.SendTelegramMessage("EA started successfully - Server time: " + serverTime);   return(INIT_SUCCEEDED);
 }
 
