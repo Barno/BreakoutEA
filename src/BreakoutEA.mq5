@@ -138,16 +138,16 @@ int OnInit()
 
    // ====== TEST DA TOGLIERE ======
    // Test base MARGIN CALULATOR
-   TestMarginCalculatorComplete();
+   // TestMarginCalculatorComplete();
 
-   // Inizializza RiskManager
-   if(!InitializeRiskManager())
-   {
-      Print("ERROR: RiskManager initialization failed");
-      return(INIT_FAILED);
-   }
+   // // Inizializza RiskManager
+   // if(!InitializeRiskManager())
+   // {
+   //    Print("ERROR: RiskManager initialization failed");
+   //    return(INIT_FAILED);
+   // }
 
-   TestRiskManagerComplete();
+   // TestRiskManagerComplete();
    // ====== FINE TEST DA TOGLIERE ======
 
    g_telegramLogger.SendTelegramMessage("EA started successfully - Server time: " + serverTime);   return(INIT_SUCCEEDED);

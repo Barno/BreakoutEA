@@ -407,17 +407,23 @@ double RiskManager::GetPointValue(const string symbol)
 //+------------------------------------------------------------------+
 double RiskManager::CalculateForexPointValue(const string symbol)
 {
-    // Per Forex: point value dipende da valuta account e cross rate
+    // Per Forex, il point value è semplicemente il tick value
+    // MT5 calcola già correttamente il tick value in valuta account
     double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-    double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
     
-    if(tickSize > 0)
+    if(tickValue <= 0)
     {
-        // Point value = Tick Value / Tick Size (per normalizzare al punto)
-        return tickValue / tickSize;
+        SetError("Invalid tick value for symbol: " + symbol);
+        return 0;
     }
     
-    return tickValue; // Fallback
+    // Debug info
+    double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+    Print("DEBUG ", symbol, ": TickValue=", DoubleToString(tickValue, 4), 
+          ", TickSize=", DoubleToString(tickSize, 8));
+    
+    // Per Forex, tick value È il point value (MT5 lo calcola già correttamente)
+    return tickValue;
 }
 
 //+------------------------------------------------------------------+
