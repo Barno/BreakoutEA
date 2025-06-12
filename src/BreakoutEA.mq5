@@ -4,7 +4,7 @@
 //|                                  Broker Time System - Simplified |
 //+------------------------------------------------------------------+
 #property copyright "Ben Team"
-#property version   "0.0.10"
+#property version   "0.10"
 #property description "Strategia Breakout Bidirezionale - Broker Time System"
 #property strict
 
@@ -14,6 +14,7 @@
 #include "Enums.mqh"
 #include "ConfigManager.mqh"
 #include "ChartVisualizer.mqh"
+#include "TelegramLogger.mqh"
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
@@ -24,7 +25,7 @@ input int Session1_Minute = 45;
 input int Session2_Hour = 14;                   
 input int Session2_Minute = 45;       
 input ENUM_TIMEFRAMES TimeframeRiferimento = PERIOD_M15;
-input bool IsSummerTime = true;                 // Flag: +1 ora per ora legale (da abilitare d'Estate)
+input bool IsSummerTime = true;                 // Flag: +1 ora per ora legale (Estate)
 
 input group "=== GESTIONE DEL RISCHIO ==="
 input double RischioPercentuale = 0.5;           
@@ -52,17 +53,28 @@ input bool TradingDomenica = false;
 input group "=== VISUALIZZAZIONE CANDELA RIFERIMENTO==="
 input int LineWidth = 1;                        
 input ENUM_LINE_STYLE LineStyle = STYLE_SOLID;
-input color ColoreLineaVerticale = clrRed;    
+input color ColoreLineaVerticale = clrRed;
+
+input group "=== TELEGRAM NOTIFICATIONS ==="
+input bool AbilitaTelegram = true;             // Abilita notifiche Telegram
+input string TelegramBotToken = "7707070116:AAFSBXAHULIq0z17osNdRq75YS7ckI2uCEQ";             // Token bot Telegram  
+input string TelegramChatID = "-1002804238340";               // Chat ID per messaggi
+input bool LogServerTimeCheck = true;           // Log controllo orario server (2:00 AM)
+input bool LogSessionAlerts = true;             // Log alert sessioni
+input bool LogCandleOHLC = true;                // Log dati OHLC candele
+input bool LogSystemHealth = true;              // Log stato sistema    
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                 |
 //+------------------------------------------------------------------+
 ConfigManager* g_configManager = NULL;
 ChartVisualizer* g_chartVisualizer = NULL;
+TelegramLogger* g_telegramLogger = NULL;
 
 bool g_isInitialized = false;
 datetime g_lastVisualizationUpdate = 0;
 datetime g_lastCleanupCheck = 0;
+datetime g_lastServerTimeCheck = 0;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -92,8 +104,12 @@ int OnInit()
       return(INIT_FAILED);
    }
    
+   
    // Disegna righe di riferimento iniziali
    DrawInitialReferenceLines();
+   
+   // Invia messaggio di avvio sistema
+   SendSystemStartupMessage();
    
    // Setup timer per cleanup periodico
    EventSetTimer(3600); // Timer ogni ora
@@ -101,9 +117,19 @@ int OnInit()
    g_isInitialized = true;
    g_lastVisualizationUpdate = TimeCurrent();
    g_lastCleanupCheck = TimeCurrent();
+   g_lastServerTimeCheck = TimeCurrent();
    
    Print("✅ BreakoutEA initialized successfully");
-   return(INIT_SUCCEEDED);
+   
+   // Inizializza TelegramLogger
+   if(!InitializeTelegramLogger())
+   {
+      Print("ERROR: TelegramLogger initialization failed");
+      return(INIT_FAILED);
+   }
+
+   string serverTime = TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES);
+   g_telegramLogger.SendTelegramMessage("EA started successfully - Server time: " + serverTime);   return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
@@ -122,6 +148,17 @@ void OnDeinit(const int reason)
       g_chartVisualizer.CleanupAllLines();
       delete g_chartVisualizer;
       g_chartVisualizer = NULL;
+   }
+   
+   if(g_telegramLogger != NULL)
+   {
+      // Invia messaggio di shutdown
+      if(g_telegramLogger.IsEnabled())
+      {
+         g_telegramLogger.SendSystemHealth("SHUTDOWN", "EA shutting down - Reason: " + GetDeinitReasonText(reason));
+      }
+      delete g_telegramLogger;
+      g_telegramLogger = NULL;
    }
    
    if(g_configManager != NULL)
@@ -176,6 +213,9 @@ void OnTimer()
       }
       g_lastCleanupCheck = currentTime;
    }
+   
+   // Server time check alle 2:00 AM
+   CheckServerTimeAlert(currentTime);
 }
 
 //+------------------------------------------------------------------+
@@ -232,6 +272,97 @@ bool InitializeChartVisualizer()
    if(g_chartVisualizer == NULL) return false;
    
    return g_chartVisualizer.Initialize(ColoreLineaVerticale, LineWidth, LineStyle);
+}
+
+//+------------------------------------------------------------------+
+//| Inizializza TelegramLogger                                      |
+//+------------------------------------------------------------------+
+bool InitializeTelegramLogger()
+{
+   g_telegramLogger = new TelegramLogger();
+   if(g_telegramLogger == NULL) return false;
+   
+   // Configura TelegramLogger
+   TelegramConfig config;
+   config.botToken = TelegramBotToken;
+   config.chatID = TelegramChatID;
+   config.enabled = AbilitaTelegram;
+   config.maxRetries = 3;
+   config.retryDelay = 1000;
+   
+   if(!g_telegramLogger.Initialize(config))
+   {
+      Print("TelegramLogger: Configuration invalid, running without notifications");
+      return true; // Non è un errore fatale
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Invia messaggio di avvio sistema                               |
+//+------------------------------------------------------------------+
+void SendSystemStartupMessage()
+{
+   if(g_telegramLogger == NULL || !g_telegramLogger.IsEnabled()) return;
+   
+   string details = "Symbol: " + Symbol() + " | Timeframe: " + EnumToString(Period()) + 
+                   " | DST: " + (IsSummerTime ? "SUMMER (+1h)" : "WINTER (base)");
+   
+   g_telegramLogger.SendSystemHealth("STARTUP", details);
+}
+
+//+------------------------------------------------------------------+
+//| Controlla e invia server time check alle 2:00 AM              |
+//+------------------------------------------------------------------+
+void CheckServerTimeAlert(datetime currentTime)
+{
+   if(g_telegramLogger == NULL || !g_telegramLogger.IsEnabled() || !LogServerTimeCheck) return;
+   
+   MqlDateTime dt;
+   TimeToStruct(currentTime, dt);
+   
+   // Verifica se sono le 2:00 AM e non abbiamo già inviato oggi
+   if(dt.hour == 2 && dt.min <= 5) // Finestra di 5 minuti
+   {
+      // Calcola se abbiamo già inviato nelle ultime 23 ore
+      if(currentTime - g_lastServerTimeCheck > 82800) // 23 ore
+      {
+         datetime expectedTime = currentTime; // Per ora, expected = current
+         g_telegramLogger.SendServerTimeCheck(currentTime, expectedTime);
+         g_lastServerTimeCheck = currentTime;
+         
+         Print("Server time check sent at 2:00 AM");
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Invia alert formazione sessione                                |
+//+------------------------------------------------------------------+
+void SendSessionFormingAlert(const string sessionName, datetime sessionTime)
+{
+   if(g_telegramLogger == NULL || !g_telegramLogger.IsEnabled() || !LogSessionAlerts) return;
+   
+   g_telegramLogger.SendSessionAlert(sessionName, sessionTime, true);
+}
+
+//+------------------------------------------------------------------+
+//| Invia alert chiusura sessione con OHLC                        |
+//+------------------------------------------------------------------+
+void SendSessionClosedAlert(const string sessionName, datetime sessionTime, double open, double high, double low, double close)
+{
+   if(g_telegramLogger == NULL || !g_telegramLogger.IsEnabled()) return;
+   
+   if(LogSessionAlerts)
+   {
+      g_telegramLogger.SendSessionAlert(sessionName, sessionTime, false);
+   }
+   
+   if(LogCandleOHLC)
+   {
+      g_telegramLogger.SendCandleOHLC(sessionName, open, high, low, close);
+   }
 }
 
 //+------------------------------------------------------------------+
