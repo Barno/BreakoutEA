@@ -1,476 +1,479 @@
 //+------------------------------------------------------------------+
-//|                                             ChartVisualizer.mqh |
-//|                                    Disegno Righe Verticali     |
-//|                                              Single Responsibility |
+//|                                             MarginCalculator.mqh |
+//|                                       Risk & Margin Management   |
+//|                                              SOLID Architecture  |
 //+------------------------------------------------------------------+
 
-#ifndef CHART_VISUALIZER_MQH
-#define CHART_VISUALIZER_MQH
+#ifndef MARGIN_CALCULATOR_MQH
+#define MARGIN_CALCULATOR_MQH
 
 #include "Enums.mqh"
-#include "TimeManager.mqh"
 
 //+------------------------------------------------------------------+
-//| ChartVisualizer Class                                           |
+//| Strutture per Asset Information                                 |
 //+------------------------------------------------------------------+
-class ChartVisualizer
+struct AssetInfo
+{
+    AssetType type;             // Tipo asset (Forex, Index, Crypto, etc.)
+    double contractSize;        // Contract size
+    double tickSize;            // Tick size minimo
+    double tickValue;           // Valore monetario per tick
+    double marginRate;          // Tasso margin requirement
+    string baseQuoteCurrency;   // Valuta base/quote
+    int digits;                 // Decimali prezzo
+    
+    AssetInfo() : type(ASSET_UNKNOWN), contractSize(0), tickSize(0), 
+                  tickValue(0), marginRate(0), baseQuoteCurrency(""), digits(0) {}
+};
+
+struct MarginInfo
+{
+    double requiredMargin;      // Margine richiesto
+    double availableMargin;     // Margine disponibile
+    double marginLevel;         // Livello margine %
+    double utilizationPercent;  // % utilizzo del margine disponibile
+    bool canOpenPosition;       // Se possiamo aprire posizione
+    string limitReason;         // Motivo limitazione se any
+    
+    MarginInfo() : requiredMargin(0), availableMargin(0), marginLevel(0),
+                   utilizationPercent(0), canOpenPosition(false), limitReason("") {}
+};
+
+//+------------------------------------------------------------------+
+//| Interface per Margin Calculator (SOLID - Dependency Inversion) |
+//+------------------------------------------------------------------+
+class IMarginCalculator
+{
+public:
+    virtual double GetRequiredMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType) = 0;
+    virtual double GetAvailableMargin() = 0;
+    virtual bool CanOpenPosition(const string symbol, double lots, ENUM_ORDER_TYPE orderType) = 0;
+    virtual MarginInfo GetMarginAnalysis(const string symbol, double lots, ENUM_ORDER_TYPE orderType) = 0;
+    virtual AssetInfo GetAssetInfo(const string symbol) = 0;
+};
+
+//+------------------------------------------------------------------+
+//| MarginCalculator Class - Main Implementation                   |
+//+------------------------------------------------------------------+
+class MarginCalculator : public IMarginCalculator
 {
 private:
-    string m_objectPrefix;          // Prefisso per oggetti grafici
-    color  m_lineColor;             // Colore linee verticali
-    int    m_lineWidth;             // Spessore linee
-    ENUM_LINE_STYLE m_lineStyle;   // Stile linee
-    datetime m_lastCleanupDate;     // Ultima data cleanup
+    string m_lastError;                    // Ultimo errore
+    double m_safetyMarginPercent;         // % margine di sicurezza
+    double m_maxMarginUtilization;        // Max % utilizzo margine
     
-    // Array per tracking oggetti creati
-    string m_createdObjects[];
-    int    m_objectCount;
+    // Cache per performance
+    AssetInfo m_cachedAssetInfo;
+    string m_cachedSymbol;
+    datetime m_cacheTime;
     
-    // TimeManager per calcoli temporali
-    TimeManager* m_timeManager;
-
 public:
-    ChartVisualizer();
-    ~ChartVisualizer();
+    MarginCalculator();
+    ~MarginCalculator();
     
-    // Main interface
-    bool Initialize(color lineColor = clrRed, int lineWidth = 1, ENUM_LINE_STYLE lineStyle = STYLE_SOLID);
-    bool DrawReferenceCandle(datetime candleTime, string sessionName = "");
-    bool DrawSessionReferences(int session1Hour, int session1Min, int session2Hour, int session2Min, bool isSummerTime);
-    bool CleanupPreviousDayLines();
-    bool CleanupAllLines();
+    // Main Interface Implementation (IMarginCalculator)
+    virtual double GetRequiredMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType) override;
+    virtual double GetAvailableMargin() override;
+    virtual bool CanOpenPosition(const string symbol, double lots, ENUM_ORDER_TYPE orderType) override;
+    virtual MarginInfo GetMarginAnalysis(const string symbol, double lots, ENUM_ORDER_TYPE orderType) override;
+    virtual AssetInfo GetAssetInfo(const string symbol) override;
+    
+    // Enhanced Features (Nostre Innovazioni)
+    double GetMarginUtilizationPercent(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
+    double CalculateMaxLotsForMargin(const string symbol, ENUM_ORDER_TYPE orderType, double marginPercent = 80.0);
+    double GetMarginRequirementForRisk(const string symbol, double riskPercent, double stopLossPoints);
+    bool ValidateMarginSafety(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
     
     // Configuration
-    void SetLineColor(color newColor) { m_lineColor = newColor; }
-    void SetLineWidth(int newWidth) { m_lineWidth = newWidth; }
-    void SetLineStyle(ENUM_LINE_STYLE newStyle) { m_lineStyle = newStyle; }
+    void SetSafetyMarginPercent(double percent) { m_safetyMarginPercent = percent; }
+    void SetMaxMarginUtilization(double percent) { m_maxMarginUtilization = percent; }
+    double GetSafetyMarginPercent() const { return m_safetyMarginPercent; }
     
-    // Info
-    int GetObjectCount() const { return m_objectCount; }
-    datetime GetLastCleanupDate() const { return m_lastCleanupDate; }
+    // Info & Status
+    string GetLastError() const { return m_lastError; }
+    void ClearCache();
 
 private:
-    string GenerateObjectName(datetime candleTime, string sessionName);
-    bool CreateVerticalLine(string objectName, datetime time);
-    bool CreateTimeLabel(string labelName, datetime time);
-    bool DeleteObject(string objectName);
-    bool ShouldCleanupObject(string objectName, datetime currentDate);
-    void AddToObjectList(string objectName);
-    void RemoveFromObjectList(string objectName);
-    datetime GetDateOnly(datetime fullDateTime);
+    // Core Calculation Methods
+    AssetInfo DetectAssetProperties(const string symbol);
+    double CalculateForexMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
+    double CalculateIndexMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
+    double CalculateCryptoMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
+    double CalculateCommodityMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
+    
+    // Asset Detection & Utilities
+    AssetType IdentifyAssetType(const string symbol);
+    double GetSymbolContractSize(const string symbol);
+    double GetSymbolMarginRate(const string symbol);
+    double GetCurrentPrice(const string symbol, ENUM_ORDER_TYPE orderType);
+    
+    // Validation & Error Handling
+    bool ValidateSymbol(const string symbol);
+    bool ValidateLots(double lots);
+    bool ValidateOrderType(ENUM_ORDER_TYPE orderType);
+    void SetError(const string error);
+    
+    // Cache Management
+    bool IsCacheValid(const string symbol);
+    void UpdateCache(const string symbol, const AssetInfo& info);
 };
 
 //+------------------------------------------------------------------+
 //| Constructor                                                      |
 //+------------------------------------------------------------------+
-ChartVisualizer::ChartVisualizer() : m_objectPrefix("BreakoutEA_RefLine_"),
-                                    m_lineColor(clrRed),
-                                    m_lineWidth(1),
-                                    m_lineStyle(STYLE_SOLID),
-                                    m_lastCleanupDate(0),
-                                    m_objectCount(0),
-                                    m_timeManager(NULL)
+MarginCalculator::MarginCalculator() : m_lastError(""),
+                                      m_safetyMarginPercent(20.0),
+                                      m_maxMarginUtilization(80.0),
+                                      m_cachedSymbol(""),
+                                      m_cacheTime(0)
 {
-    ArrayResize(m_createdObjects, 0);
+    Print("MarginCalculator: Initialized with safety margin ", m_safetyMarginPercent, "%");
 }
 
 //+------------------------------------------------------------------+
 //| Destructor                                                       |
 //+------------------------------------------------------------------+
-ChartVisualizer::~ChartVisualizer()
+MarginCalculator::~MarginCalculator()
 {
-    CleanupAllLines();
-    
-    // Cleanup TimeManager
-    if(m_timeManager != NULL)
-    {
-        delete m_timeManager;
-        m_timeManager = NULL;
-    }
 }
 
 //+------------------------------------------------------------------+
-//| Inizializza il visualizzatore                                   |
+//| Calcola margine richiesto per posizione                        |
 //+------------------------------------------------------------------+
-bool ChartVisualizer::Initialize(color lineColor = clrRed, int lineWidth = 1, ENUM_LINE_STYLE lineStyle = STYLE_SOLID)
+double MarginCalculator::GetRequiredMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
 {
-    Print("ChartVisualizer: Initializing...");
-    
-    m_lineColor = lineColor;
-    m_lineWidth = lineWidth;
-    m_lineStyle = lineStyle;
-    m_lastCleanupDate = GetDateOnly(TimeCurrent());
-    
-    // Inizializza TimeManager interno
-    m_timeManager = new TimeManager();
-    if(m_timeManager == NULL)
+    // Validazione input
+    if(!ValidateSymbol(symbol) || !ValidateLots(lots) || !ValidateOrderType(orderType))
     {
-        Print("ChartVisualizer ERROR: Failed to create TimeManager");
-        return false;
+        return -1;
     }
     
-    // Cleanup eventuali linee precedenti
-    CleanupAllLines();
-    
-    Print("ChartVisualizer: Initialized successfully");
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Disegna righe di riferimento per entrambe le sessioni          |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::DrawSessionReferences(int session1Hour, int session1Min, int session2Hour, int session2Min, bool isSummerTime)
-{
-    if(m_timeManager == NULL)
+    // Ottieni info asset
+    AssetInfo assetInfo = GetAssetInfo(symbol);
+    if(assetInfo.type == ASSET_UNKNOWN)
     {
-        Print("ChartVisualizer ERROR: TimeManager not initialized");
-        return false;
+        SetError("Unknown asset type for symbol: " + symbol);
+        return -1;
     }
     
-    Print("ChartVisualizer: Drawing session references...");
-    Print("DST Status: ", isSummerTime ? "SUMMER (+1h)" : "WINTER (base)");
+    double requiredMargin = 0;
     
-    bool success = true;
-    
-    // Crea e disegna Session 1
-    datetime session1Time = m_timeManager.CreateBrokerSessionTime(session1Hour, session1Min, isSummerTime);
-    if(session1Time > 0)
+    // Calcola margine basato sul tipo asset
+    switch(assetInfo.type)
     {
-        if(DrawReferenceCandle(session1Time, "Session1"))
-        {
-            Print("✅ Session1 line: ", TimeToString(session1Time, TIME_DATE | TIME_MINUTES), " broker time");
-            m_timeManager.LogSessionTime("SESSION 1", session1Hour, session1Min, isSummerTime);
-        }
-        else
-        {
-            Print("❌ Failed to draw Session1 line");
-            success = false;
-        }
-    }
-    else
-    {
-        Print("❌ Invalid Session1 time calculated");
-        success = false;
-    }
-    
-    // Crea e disegna Session 2
-    datetime session2Time = m_timeManager.CreateBrokerSessionTime(session2Hour, session2Min, isSummerTime);
-    if(session2Time > 0)
-    {
-        if(DrawReferenceCandle(session2Time, "Session2"))
-        {
-            Print("✅ Session2 line: ", TimeToString(session2Time, TIME_DATE | TIME_MINUTES), " broker time");
-            m_timeManager.LogSessionTime("SESSION 2", session2Hour, session2Min, isSummerTime);
-        }
-        else
-        {
-            Print("❌ Failed to draw Session2 line");
-            success = false;
-        }
-    }
-    else
-    {
-        Print("❌ Invalid Session2 time calculated");
-        success = false;
-    }
-    
-    if(success)
-    {
-        Print("ChartVisualizer: All session references drawn successfully");
-    }
-    else
-    {
-        Print("ChartVisualizer: Some session references failed to draw");
-    }
-    
-    return success;
-}
-
-//+------------------------------------------------------------------+
-//| Disegna riga verticale su candela di riferimento               |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::DrawReferenceCandle(datetime candleTime, string sessionName = "")
-{
-    // Genera nome univoco per l'oggetto
-    string objectName = GenerateObjectName(candleTime, sessionName);
-    
-    // Crea la linea verticale
-    if(!CreateVerticalLine(objectName, candleTime))
-    {
-        Print("ChartVisualizer ERROR: Failed to create vertical line for ", TimeToString(candleTime));
-        return false;
-    }
-    
-    // Aggiungi alla lista oggetti tracciati
-    AddToObjectList(objectName);
-    
-    Print("ChartVisualizer: Reference line created at ", TimeToString(candleTime), 
-          sessionName != "" ? " (Session: " + sessionName + ")" : "");
-    
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Pulisce linee del giorno precedente                            |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::CleanupPreviousDayLines()
-{
-    datetime currentDate = GetDateOnly(TimeCurrent());
-    
-    // Se è ancora lo stesso giorno, non fare cleanup
-    if(currentDate == m_lastCleanupDate)
-        return true;
-    
-    Print("ChartVisualizer: Cleaning up previous day lines...");
-    
-    int cleaned = 0;
-    
-    // Scansiona tutti gli oggetti tracciati
-    for(int i = m_objectCount - 1; i >= 0; i--)
-    {
-        if(ShouldCleanupObject(m_createdObjects[i], currentDate))
-        {
-            if(DeleteObject(m_createdObjects[i]))
-            {
-                RemoveFromObjectList(m_createdObjects[i]);
-                cleaned++;
-            }
-        }
-    }
-    
-    m_lastCleanupDate = currentDate;
-    
-    Print("ChartVisualizer: Cleaned up ", cleaned, " previous day lines");
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Pulisce tutte le linee                                         |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::CleanupAllLines()
-{
-    Print("ChartVisualizer: Cleaning up all lines...");
-    
-    int cleaned = 0;
-    
-    // Elimina tutti gli oggetti tracciati
-    for(int i = 0; i < m_objectCount; i++)
-    {
-        if(DeleteObject(m_createdObjects[i]))
-            cleaned++;
-    }
-    
-    // Reset array
-    ArrayResize(m_createdObjects, 0);
-    m_objectCount = 0;
-    
-    Print("ChartVisualizer: Cleaned up ", cleaned, " lines");
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Genera nome univoco per l'oggetto grafico                      |
-//+------------------------------------------------------------------+
-string ChartVisualizer::GenerateObjectName(datetime candleTime, string sessionName)
-{
-    string name = m_objectPrefix;
-    name += TimeToString(candleTime, TIME_DATE | TIME_MINUTES);
-    name = StringReplace(name, ":", "");
-    name = StringReplace(name, " ", "_");
-    name = StringReplace(name, ".", "");
-    
-    if(sessionName != "")
-        name += "_" + sessionName;
-    
-    return name;
-}
-
-//+------------------------------------------------------------------+
-//| Crea linea verticale sul grafico con testo orario              |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::CreateVerticalLine(string objectName, datetime time)
-{
-    // Elimina oggetto se già esiste
-    if(ObjectFind(0, objectName) >= 0)
-        ObjectDelete(0, objectName);
-    
-    // Crea nuova linea verticale
-    if(!ObjectCreate(0, objectName, OBJ_VLINE, 0, time, 0))
-    {
-        Print("ChartVisualizer ERROR: Failed to create vertical line object: ", objectName);
-        return false;
-    }
-    
-    // Imposta proprietà linea
-    ObjectSetInteger(0, objectName, OBJPROP_COLOR, m_lineColor);
-    ObjectSetInteger(0, objectName, OBJPROP_WIDTH, m_lineWidth);
-    ObjectSetInteger(0, objectName, OBJPROP_STYLE, m_lineStyle);
-    ObjectSetInteger(0, objectName, OBJPROP_BACK, true);  // Dietro il grafico
-    ObjectSetInteger(0, objectName, OBJPROP_SELECTABLE, false);  // Non selezionabile
-    ObjectSetInteger(0, objectName, OBJPROP_HIDDEN, true);  // Nascosto nella lista oggetti
-    
-    // Imposta descrizione
-    string description = "Reference Candle: " + TimeToString(time, TIME_DATE | TIME_MINUTES);
-    ObjectSetString(0, objectName, OBJPROP_TEXT, description);
-    
-    // Crea testo con orario in basso alla linea
-    string textObjectName = objectName + "_Text";
-    if(CreateTimeLabel(textObjectName, time))
-    {
-        Print("ChartVisualizer: Time label created for ", TimeToString(time, TIME_MINUTES));
-    }
-    
-    // Refresh chart
-    ChartRedraw(0);
-    
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Crea etichetta temporale per la linea verticale                |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::CreateTimeLabel(string labelName, datetime time)
-{
-    // Elimina etichetta se già esiste
-    if(ObjectFind(0, labelName) >= 0)
-        ObjectDelete(0, labelName);
-    
-    // Ottieni range prezzo del grafico per posizionamento
-    double chartHigh = ChartGetDouble(0, CHART_PRICE_MAX);
-    double chartLow = ChartGetDouble(0, CHART_PRICE_MIN);
-    double priceRange = chartHigh - chartLow;
-    
-    // Posiziona testo nel 10% inferiore del grafico
-    double labelPrice = chartLow + (priceRange * 0.10);
-    
-    // Crea oggetto testo
-    if(!ObjectCreate(0, labelName, OBJ_TEXT, 0, time, labelPrice))
-    {
-        Print("ChartVisualizer ERROR: Failed to create time label: ", labelName);
-        return false;
-    }
-    
-    // Imposta proprietà del testo
-    string timeText = TimeToString(time, TIME_MINUTES);  // Solo HH:MM
-    ObjectSetString(0, labelName, OBJPROP_TEXT, timeText);
-    ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
-    ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
-    ObjectSetInteger(0, labelName, OBJPROP_COLOR, m_lineColor);
-    ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, ANCHOR_UPPER);
-    ObjectSetInteger(0, labelName, OBJPROP_BACK, false);  // Sopra il grafico
-    ObjectSetInteger(0, labelName, OBJPROP_SELECTABLE, false);
-    ObjectSetInteger(0, labelName, OBJPROP_HIDDEN, true);
-    
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Elimina oggetto grafico                                        |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::DeleteObject(string objectName)
-{
-    bool success = true;
-    
-    // Elimina linea principale
-    if(ObjectFind(0, objectName) >= 0)
-    {
-        if(!ObjectDelete(0, objectName))
-        {
-            Print("ChartVisualizer WARNING: Failed to delete object: ", objectName);
-            success = false;
-        }
-    }
-    
-    // Elimina etichetta associata
-    string textObjectName = objectName + "_Text";
-    if(ObjectFind(0, textObjectName) >= 0)
-    {
-        if(!ObjectDelete(0, textObjectName))
-        {
-            Print("ChartVisualizer WARNING: Failed to delete text label: ", textObjectName);
-            success = false;
-        }
-    }
-    
-    if(success)
-    {
-        ChartRedraw(0);
-    }
-    
-    return success;
-}
-
-//+------------------------------------------------------------------+
-//| Determina se oggetto deve essere eliminato                     |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::ShouldCleanupObject(string objectName, datetime currentDate)
-{
-    // Estrai data dall'oggetto (dal nome)
-    // Il nome contiene la data/ora, quindi possiamo fare un parsing semplice
-    
-    // Per ora, criterio semplice: se l'oggetto esiste da più di 1 giorno
-    datetime objectTime = 0;
-    
-    // Prova a ottenere il tempo dall'oggetto se esiste ancora
-    if(ObjectFind(0, objectName) >= 0)
-    {
-        objectTime = (datetime)ObjectGetInteger(0, objectName, OBJPROP_TIME);
-        datetime objectDate = GetDateOnly(objectTime);
-        
-        // Elimina se è di un giorno precedente
-        return (objectDate < currentDate);
-    }
-    
-    return true;  // Se non esiste più, rimuovi dalla lista
-}
-
-//+------------------------------------------------------------------+
-//| Aggiunge oggetto alla lista tracciata                          |
-//+------------------------------------------------------------------+
-void ChartVisualizer::AddToObjectList(string objectName)
-{
-    // Ridimensiona array se necessario
-    ArrayResize(m_createdObjects, m_objectCount + 1);
-    
-    // Aggiungi nuovo oggetto
-    m_createdObjects[m_objectCount] = objectName;
-    m_objectCount++;
-}
-
-//+------------------------------------------------------------------+
-//| Rimuove oggetto dalla lista tracciata                          |
-//+------------------------------------------------------------------+
-void ChartVisualizer::RemoveFromObjectList(string objectName)
-{
-    // Trova oggetto nella lista
-    for(int i = 0; i < m_objectCount; i++)
-    {
-        if(m_createdObjects[i] == objectName)
-        {
-            // Sposta elementi successivi
-            for(int j = i; j < m_objectCount - 1; j++)
-            {
-                m_createdObjects[j] = m_createdObjects[j + 1];
-            }
-            
-            m_objectCount--;
-            ArrayResize(m_createdObjects, m_objectCount);
+        case ASSET_FOREX:
+            requiredMargin = CalculateForexMargin(symbol, lots, orderType);
             break;
+        case ASSET_INDICES:
+            requiredMargin = CalculateIndexMargin(symbol, lots, orderType);
+            break;
+        case ASSET_CRYPTO:
+            requiredMargin = CalculateCryptoMargin(symbol, lots, orderType);
+            break;
+        case ASSET_COMMODITY:
+            requiredMargin = CalculateCommodityMargin(symbol, lots, orderType);
+            break;
+        default:
+            SetError("Unsupported asset type");
+            return -1;
+    }
+    
+    if(requiredMargin > 0)
+    {
+        Print("MarginCalculator: Required margin for ", lots, " lots of ", symbol, " = ", 
+              DoubleToString(requiredMargin, 2), " ", AccountInfoString(ACCOUNT_CURRENCY));
+    }
+    
+    return requiredMargin;
+}
+
+//+------------------------------------------------------------------+
+//| Ottiene margine disponibile                                    |
+//+------------------------------------------------------------------+
+double MarginCalculator::GetAvailableMargin()
+{
+    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+    
+    if(freeMargin < 0)
+    {
+        SetError("Cannot retrieve account free margin");
+        return 0;
+    }
+    
+    Print("MarginCalculator: Available margin = ", DoubleToString(freeMargin, 2), 
+          " ", AccountInfoString(ACCOUNT_CURRENCY));
+    
+    return freeMargin;
+}
+
+//+------------------------------------------------------------------+
+//| Verifica se possiamo aprire posizione                          |
+//+------------------------------------------------------------------+
+bool MarginCalculator::CanOpenPosition(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
+{
+    double requiredMargin = GetRequiredMargin(symbol, lots, orderType);
+    if(requiredMargin <= 0) return false;
+    
+    double availableMargin = GetAvailableMargin();
+    if(availableMargin <= 0) return false;
+    
+    // Applica safety margin
+    double safetyAdjustedMargin = availableMargin * (100.0 - m_safetyMarginPercent) / 100.0;
+    
+    bool canOpen = requiredMargin <= safetyAdjustedMargin;
+    
+    Print("MarginCalculator: Can open position? ", canOpen ? "YES" : "NO",
+          " (Required: ", DoubleToString(requiredMargin, 2),
+          ", Available: ", DoubleToString(safetyAdjustedMargin, 2), ")");
+    
+    return canOpen;
+}
+
+//+------------------------------------------------------------------+
+//| Analisi completa margine                                       |
+//+------------------------------------------------------------------+
+MarginInfo MarginCalculator::GetMarginAnalysis(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
+{
+    MarginInfo info;
+    
+    info.requiredMargin = GetRequiredMargin(symbol, lots, orderType);
+    info.availableMargin = GetAvailableMargin();
+    
+    if(info.requiredMargin > 0 && info.availableMargin > 0)
+    {
+        info.utilizationPercent = (info.requiredMargin / info.availableMargin) * 100.0;
+        info.marginLevel = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+        
+        // Determina se possiamo aprire
+        double safetyAdjustedMargin = info.availableMargin * (100.0 - m_safetyMarginPercent) / 100.0;
+        info.canOpenPosition = info.requiredMargin <= safetyAdjustedMargin;
+        
+        if(!info.canOpenPosition)
+        {
+            if(info.requiredMargin > info.availableMargin)
+                info.limitReason = "Insufficient margin";
+            else
+                info.limitReason = "Safety margin limit (" + DoubleToString(m_safetyMarginPercent, 1) + "%)";
         }
     }
+    else
+    {
+        info.canOpenPosition = false;
+        info.limitReason = "Calculation error";
+    }
+    
+    return info;
 }
 
 //+------------------------------------------------------------------+
-//| Ottiene solo la data (senza orario)                            |
+//| Ottiene informazioni asset                                     |
 //+------------------------------------------------------------------+
-datetime ChartVisualizer::GetDateOnly(datetime fullDateTime)
+AssetInfo MarginCalculator::GetAssetInfo(const string symbol)
 {
-    MqlDateTime dt;
-    TimeToStruct(fullDateTime, dt);
-    dt.hour = 0;
-    dt.min = 0;
-    dt.sec = 0;
-    return StructToTime(dt);
+    // Controlla cache
+    if(IsCacheValid(symbol))
+    {
+        return m_cachedAssetInfo;
+    }
+    
+    // Rileva proprietà asset
+    AssetInfo info = DetectAssetProperties(symbol);
+    
+    // Aggiorna cache
+    UpdateCache(symbol, info);
+    
+    return info;
 }
 
-#endif // CHART_VISUALIZER_MQH
+//+------------------------------------------------------------------+
+//| Calcola percentuale utilizzo margine                           |
+//+------------------------------------------------------------------+
+double MarginCalculator::GetMarginUtilizationPercent(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
+{
+    double requiredMargin = GetRequiredMargin(symbol, lots, orderType);
+    double availableMargin = GetAvailableMargin();
+    
+    if(requiredMargin <= 0 || availableMargin <= 0) return 0;
+    
+    return (requiredMargin / availableMargin) * 100.0;
+}
+
+//+------------------------------------------------------------------+
+//| Calcola lotti massimi per percentuale margine                  |
+//+------------------------------------------------------------------+
+double MarginCalculator::CalculateMaxLotsForMargin(const string symbol, ENUM_ORDER_TYPE orderType, double marginPercent = 80.0)
+{
+    double availableMargin = GetAvailableMargin();
+    if(availableMargin <= 0) return 0;
+    
+    double targetMargin = availableMargin * marginPercent / 100.0;
+    
+    // Test con 1 lotto per ottenere ratio
+    double testMargin = GetRequiredMargin(symbol, 1.0, orderType);
+    if(testMargin <= 0) return 0;
+    
+    double maxLots = targetMargin / testMargin;
+    
+    // Arrotonda al minimo step size del broker
+    double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double stepLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+    
+    maxLots = MathFloor(maxLots / stepLot) * stepLot;
+    maxLots = MathMax(maxLots, minLot);
+    
+    Print("MarginCalculator: Max lots for ", marginPercent, "% margin = ", DoubleToString(maxLots, 2));
+    
+    return maxLots;
+}
+
+//+------------------------------------------------------------------+
+//| Implementazione metodi privati continua...                     |
+//+------------------------------------------------------------------+
+
+// METODI PRIVATI - Implementazione Base per MVP
+// (Implementazione completa nei prossimi step)
+
+AssetInfo MarginCalculator::DetectAssetProperties(const string symbol)
+{
+    AssetInfo info;
+    info.type = IdentifyAssetType(symbol);
+    info.contractSize = GetSymbolContractSize(symbol);
+    info.tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+    info.tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+    info.marginRate = GetSymbolMarginRate(symbol);
+    info.digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    
+    return info;
+}
+
+AssetType MarginCalculator::IdentifyAssetType(const string symbol)
+{
+    // Identificazione base per MVP
+    string upperSymbol = symbol;
+    StringToUpper(upperSymbol);
+    
+    // Forex patterns
+    if(StringLen(symbol) >= 6 && StringLen(symbol) <= 7)
+    {
+        if(StringFind(upperSymbol, "USD") >= 0 || StringFind(upperSymbol, "EUR") >= 0 ||
+           StringFind(upperSymbol, "GBP") >= 0 || StringFind(upperSymbol, "JPY") >= 0)
+            return ASSET_FOREX;
+    }
+    
+    // Indices patterns
+    if(StringFind(upperSymbol, "DAX") >= 0 || StringFind(upperSymbol, "SPX") >= 0 ||
+       StringFind(upperSymbol, "NAS") >= 0 || StringFind(upperSymbol, "FTSE") >= 0)
+        return ASSET_INDICES;
+    
+    // Crypto patterns
+    if(StringFind(upperSymbol, "BTC") >= 0 || StringFind(upperSymbol, "ETH") >= 0 ||
+       StringFind(upperSymbol, "CRYPTO") >= 0)
+        return ASSET_CRYPTO;
+    
+    // Commodity patterns  
+    if(StringFind(upperSymbol, "GOLD") >= 0 || StringFind(upperSymbol, "SILVER") >= 0 ||
+       StringFind(upperSymbol, "OIL") >= 0 || StringFind(upperSymbol, "XAU") >= 0)
+        return ASSET_COMMODITY;
+    
+    return ASSET_UNKNOWN;
+}
+
+double MarginCalculator::CalculateForexMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
+{
+    // Formula base Forex: (Lots * ContractSize * Price) / Leverage
+    double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+    double price = GetCurrentPrice(symbol, orderType);
+    double leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
+    
+    if(contractSize <= 0 || price <= 0 || leverage <= 0) return -1;
+    
+    return (lots * contractSize * price) / leverage;
+}
+
+double MarginCalculator::CalculateIndexMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
+{
+    // Formula indici: simile a Forex ma con contract size specifico
+    return CalculateForexMargin(symbol, lots, orderType);
+}
+
+double MarginCalculator::CalculateCryptoMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
+{
+    // Formula crypto: può variare per broker
+    return CalculateForexMargin(symbol, lots, orderType);
+}
+
+double MarginCalculator::CalculateCommodityMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
+{
+    // Formula commodity: standard con margine specifico
+    return CalculateForexMargin(symbol, lots, orderType);
+}
+
+double MarginCalculator::GetSymbolContractSize(const string symbol)
+{
+    return SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+}
+
+double MarginCalculator::GetSymbolMarginRate(const string symbol)
+{
+    return SymbolInfoDouble(symbol, SYMBOL_MARGIN_INITIAL);
+}
+
+double MarginCalculator::GetCurrentPrice(const string symbol, ENUM_ORDER_TYPE orderType)
+{
+    MqlTick tick;
+    if(!SymbolInfoTick(symbol, tick)) return 0;
+    
+    return (orderType == ORDER_TYPE_BUY || orderType == ORDER_TYPE_BUY_STOP || orderType == ORDER_TYPE_BUY_LIMIT) ? 
+           tick.ask : tick.bid;
+}
+
+bool MarginCalculator::ValidateSymbol(const string symbol)
+{
+    if(symbol == "")
+    {
+        SetError("Empty symbol");
+        return false;
+    }
+    return true;
+}
+
+bool MarginCalculator::ValidateLots(double lots)
+{
+    if(lots <= 0)
+    {
+        SetError("Invalid lot size");
+        return false;
+    }
+    return true;
+}
+
+bool MarginCalculator::ValidateOrderType(ENUM_ORDER_TYPE orderType)
+{
+    return true; // Per ora accetta tutti i tipi
+}
+
+void MarginCalculator::SetError(const string error)
+{
+    m_lastError = error;
+    Print("MarginCalculator ERROR: ", error);
+}
+
+bool MarginCalculator::IsCacheValid(const string symbol)
+{
+    return (symbol == m_cachedSymbol && TimeCurrent() - m_cacheTime < 60); // Cache per 1 minuto
+}
+
+void MarginCalculator::UpdateCache(const string symbol, const AssetInfo& info)
+{
+    m_cachedSymbol = symbol;
+    m_cachedAssetInfo = info;
+    m_cacheTime = TimeCurrent();
+}
+
+void MarginCalculator::ClearCache()
+{
+    m_cachedSymbol = "";
+    m_cacheTime = 0;
+}
+
+#endif // MARGIN_CALCULATOR_MQH
