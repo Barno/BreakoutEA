@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                               BreakoutEA.mq5    |
 //|                                  Strategia Breakout Bidirezionale |
-//|                                      Con TimeManager e ChartVisualizer |
+//|                                                                   |
 //+------------------------------------------------------------------+
 #property copyright "BreakoutEA Team"
 #property version   "1.00"
-#property description "Strategia Breakout Bidirezionale con Timezone Detection"
+#property description "Strategia Breakout Bidirezionale"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -74,54 +74,43 @@ datetime g_lastCleanupCheck = 0;
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("=== BREAKOUT EA WITH TIMEZONE DETECTION ===");
+   Print("🚀 BreakoutEA v1.0 - Initializing...");
    Print("Symbol: ", Symbol(), " | Timeframe: ", EnumToString(Period()));
    
    g_isInitialized = false;
    
-   // Step 1: Inizializza ConfigManager
-   Print("\n1. INITIALIZING: ConfigManager");
+   // Inizializza ConfigManager
    if(!InitializeConfigManager())
    {
       Print("ERROR: ConfigManager initialization failed");
       return(INIT_FAILED);
    }
-   Print("SUCCESS: ConfigManager initialized");
    
-   // Step 2: Inizializza TimeManager
-   Print("\n2. INITIALIZING: TimeManager");
+   // Inizializza TimeManager
    if(!InitializeTimeManager())
    {
       Print("ERROR: TimeManager initialization failed");
       return(INIT_FAILED);
    }
-   Print("SUCCESS: TimeManager initialized");
    
-   // Step 3: Test timezone detection
-   Print("\n3. TESTING: Timezone Detection");
-   TestBrokerTimezoneDetection();
-   
-   // Step 4: Inizializza ChartVisualizer  
-   Print("\n4. INITIALIZING: ChartVisualizer");
+   // Inizializza ChartVisualizer
    if(!InitializeChartVisualizer())
    {
       Print("ERROR: ChartVisualizer initialization failed");
       return(INIT_FAILED);
    }
-   Print("SUCCESS: ChartVisualizer initialized");
    
-   // Step 5: Disegna righe iniziali
-   Print("\n5. DRAWING: Initial Reference Lines");
+   // Disegna righe di riferimento iniziali
    DrawInitialReferenceLines();
    
-   // Step 6: Setup timer
-   EventSetTimer(300); // Timer ogni 5 minuti
+   // Setup timer per cleanup periodico
+   EventSetTimer(3600); // Timer ogni ora
    
    g_isInitialized = true;
    g_lastVisualizationUpdate = TimeCurrent();
    g_lastCleanupCheck = TimeCurrent();
    
-   Print("\n=== BREAKOUT EA INITIALIZED SUCCESSFULLY ===");
+   Print("✅ BreakoutEA initialized successfully");
    return(INIT_SUCCEEDED);
 }
 
@@ -130,7 +119,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   Print("=== BREAKOUT EA SHUTTING DOWN ===");
+   Print("🛑 BreakoutEA - Shutting down...");
    Print("Reason: ", GetDeinitReasonText(reason));
    
    EventKillTimer();
@@ -157,7 +146,7 @@ void OnDeinit(const int reason)
    
    g_isInitialized = false;
    
-   Print("=== BREAKOUT EA SHUTDOWN COMPLETED ===");
+   Print("✅ BreakoutEA shutdown completed");
 }
 
 //+------------------------------------------------------------------+
@@ -167,7 +156,7 @@ void OnTick()
 {
    if(!g_isInitialized) return;
    
-   // Check aggiornamento visualizzazione
+   // Aggiorna visualizzazione se necessario
    datetime currentTime = TimeCurrent();
    if(ShouldUpdateVisualization(currentTime))
    {
@@ -175,7 +164,12 @@ void OnTick()
       g_lastVisualizationUpdate = currentTime;
    }
    
-   // TODO: Logica trading principale
+   // TODO: Implementare logica trading principale
+   // 1. Verifica se è orario di apertura sessione
+   // 2. Analizza candela di riferimento
+   // 3. Calcola livelli entry/SL
+   // 4. Gestisci ordini e posizioni
+   // 5. Monitora take profit
 }
 
 //+------------------------------------------------------------------+
@@ -187,20 +181,15 @@ void OnTimer()
    
    datetime currentTime = TimeCurrent();
    
-   // Cleanup periodico
+   // Cleanup periodico righe vecchie
    if(currentTime - g_lastCleanupCheck > 86400) // 24 ore
    {
-      Print("Timer: Performing periodic cleanup...");
       if(g_chartVisualizer != NULL)
       {
          g_chartVisualizer.CleanupPreviousDayLines();
       }
       g_lastCleanupCheck = currentTime;
    }
-   
-   // Log timezone status periodico
-   Print("\n=== TIMER: TIMEZONE STATUS UPDATE ===");
-   LogCurrentTimezoneStatus();
 }
 
 //+------------------------------------------------------------------+
@@ -248,201 +237,7 @@ bool InitializeChartVisualizer()
 }
 
 //+------------------------------------------------------------------+
-//| Test rilevamento timezone broker                               |
-//+------------------------------------------------------------------+
-void TestBrokerTimezoneDetection()
-{
-   if(g_timeManager == NULL) return;
-   
-   Print("\n--- BROKER TIMEZONE DETECTION (Enhanced) ---");
-   
-   // Dati temporali raw con TimeTradeServer (più preciso)
-   MqlDateTime serverDt;
-   datetime serverTime = TimeTradeServer(serverDt);
-   datetime currentTime = TimeCurrent();
-   datetime gmtTime = TimeGMT();
-   
-   Print("=== RAW TIME DATA (Enhanced Detection) ===");
-   Print("Server Time (TimeTradeServer): ", TimeToString(serverTime, TIME_DATE | TIME_MINUTES | TIME_SECONDS));
-   Print("Current Time (TimeCurrent): ", TimeToString(currentTime, TIME_DATE | TIME_MINUTES | TIME_SECONDS));
-   Print("GMT Time: ", TimeToString(gmtTime, TIME_DATE | TIME_MINUTES | TIME_SECONDS));
-   
-   // Mostra differenza tra TimeTradeServer e TimeCurrent
-   int diffSeconds = (int)(serverTime - currentTime);
-   if(diffSeconds != 0)
-   {
-      Print("IMPORTANT: TimeTradeServer vs TimeCurrent difference: ", diffSeconds, " seconds");
-      Print("Using TimeTradeServer for more accurate timezone detection");
-   }
-   else
-   {
-      Print("TimeTradeServer and TimeCurrent are synchronized");
-   }
-   
-   // Calcolo offset dettagliato
-   if(gmtTime > 0)
-   {
-      int offsetSeconds = (int)(serverTime - gmtTime);
-      int offsetHours = offsetSeconds / 3600;
-      int offsetMinutes = MathAbs(offsetSeconds % 3600) / 60;
-      
-      Print("\nOFFSET CALCULATION DETAILS:");
-      Print("Raw offset (seconds): ", offsetSeconds);
-      Print("Calculated offset: GMT", offsetHours > 0 ? "+" : "", offsetHours, 
-            ":", StringFormat("%02d", offsetMinutes));
-   }
-   
-   // Timezone rilevate
-   TimeZoneInfo brokerTZ = g_timeManager.GetBrokerTimeZone();
-   TimeZoneInfo italianTZ = g_timeManager.GetItalianTimeZone();
-   
-   Print("\n=== DETECTED BROKER TIMEZONE ===");
-   Print("Timezone Name: ", brokerTZ.timeZoneName);
-   Print("GMT Offset: ", brokerTZ.offsetHours > 0 ? "+" : "", brokerTZ.offsetHours, " hours");
-   Print("DST Status: ", brokerTZ.isDSTActive ? "ACTIVE" : "INACTIVE");
-   
-   Print("\n=== ITALIAN TIMEZONE ===");
-   Print("Timezone Name: ", italianTZ.timeZoneName);
-   Print("GMT Offset: ", italianTZ.offsetHours > 0 ? "+" : "", italianTZ.offsetHours, " hours");  
-   Print("DST Status: ", italianTZ.isDSTActive ? "ACTIVE (Summer)" : "INACTIVE (Winter)");
-   
-   // Mostra dettagli struttura MqlDateTime del server
-   Print("\n=== SERVER TIME DETAILS (MqlDateTime) ===");
-   Print("Year: ", serverDt.year);
-   Print("Month: ", StringFormat("%02u", serverDt.mon));
-   Print("Day: ", StringFormat("%02u", serverDt.day));
-   Print("Hour: ", StringFormat("%02u", serverDt.hour));
-   Print("Minute: ", StringFormat("%02u", serverDt.min));
-   Print("Second: ", StringFormat("%02u", serverDt.sec));
-   Print("Day of Week: ", serverDt.day_of_week, " (", GetDayOfWeekName(serverDt.day_of_week), ")");
-   Print("Day of Year: ", serverDt.day_of_year);
-   
-   // Analisi geografica
-   AnalyzeBrokerLocation(brokerTZ);
-   
-   // Test conversioni
-   TestTimeConversions();
-   
-   // Differenza temporale
-   CalculateTimeDifference(brokerTZ, italianTZ);
-}
-
-//+------------------------------------------------------------------+
-//| Ottiene nome giorno della settimana                            |
-//+------------------------------------------------------------------+
-string GetDayOfWeekName(int dayOfWeek)
-{
-   switch(dayOfWeek)
-   {
-      case 0: return "SUNDAY";
-      case 1: return "MONDAY";
-      case 2: return "TUESDAY";
-      case 3: return "WEDNESDAY";
-      case 4: return "THURSDAY";
-      case 5: return "FRIDAY";
-      case 6: return "SATURDAY";
-      default: return "UNKNOWN";
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Analizza posizione geografica broker                           |
-//+------------------------------------------------------------------+
-void AnalyzeBrokerLocation(const TimeZoneInfo& brokerTZ)
-{
-   Print("\n=== BROKER GEOGRAPHIC ANALYSIS ===");
-   
-   string timezoneName = brokerTZ.timeZoneName;
-   
-   if(StringFind(timezoneName, "Israel") >= 0)
-   {
-      Print("🇮🇱 BROKER SERVERS LIKELY IN ISRAEL");
-      Print("   Location: Tel Aviv / Jerusalem area");
-      Print("   Many Forex brokers use Israeli data centers");
-      Print("   IST (Winter): GMT+2 | IDT (Summer): GMT+3");
-   }
-   else if(StringFind(timezoneName, "Cyprus") >= 0 || StringFind(timezoneName, "Eastern Europe") >= 0)
-   {
-      Print("🇨🇾 BROKER SERVERS LIKELY IN CYPRUS");
-      Print("   Location: Nicosia / Limassol area");
-      Print("   EU-regulated brokers often use Cyprus servers");
-      Print("   EET (Winter): GMT+2 | EEST (Summer): GMT+3");
-   }
-   else if(StringFind(timezoneName, "London") >= 0 || StringFind(timezoneName, "GMT") >= 0)
-   {
-      Print("🇬🇧 BROKER SERVERS LIKELY IN UNITED KINGDOM");
-      Print("   Location: London area");
-   }
-   else if(StringFind(timezoneName, "Central Europe") >= 0)
-   {
-      Print("🇪🇺 BROKER SERVERS LIKELY IN CENTRAL EUROPE");
-      Print("   Location: Germany, France, or Netherlands");
-   }
-   else
-   {
-      Print("🌍 BROKER TIMEZONE: ", timezoneName);
-      Print("   Offset: GMT", brokerTZ.offsetHours > 0 ? "+" : "", brokerTZ.offsetHours);
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Test conversioni temporali                                      |
-//+------------------------------------------------------------------+
-void TestTimeConversions()
-{
-   if(g_timeManager == NULL) return;
-   
-   Print("\n=== TIME CONVERSION TESTS ===");
-   
-   datetime currentBroker = g_timeManager.GetBrokerTime();
-   datetime currentItalian = g_timeManager.GetItalianTime();
-   
-   Print("Current Broker Time: ", TimeToString(currentBroker, TIME_DATE | TIME_MINUTES));
-   Print("Current Italian Time: ", TimeToString(currentItalian, TIME_DATE | TIME_MINUTES));
-   
-   // Test conversione sessione 8:45
-   SessionConfig sessionConfig = g_configManager.GetSessionConfig();
-   datetime italianSession = CalculateItalianSessionTime(sessionConfig.referenceHour1, sessionConfig.referenceMinute1);
-   datetime brokerSession = g_timeManager.ConvertItalianToBroker(italianSession);
-   
-   Print("\nSESSION TIME CONVERSION:");
-   Print("Italian ", sessionConfig.referenceHour1, ":", StringFormat("%02d", sessionConfig.referenceMinute1),
-         " = ", TimeToString(italianSession, TIME_DATE | TIME_MINUTES));
-   Print("Broker equivalent = ", TimeToString(brokerSession, TIME_DATE | TIME_MINUTES));
-}
-
-//+------------------------------------------------------------------+
-//| Calcola differenza temporale                                   |
-//+------------------------------------------------------------------+
-void CalculateTimeDifference(const TimeZoneInfo& brokerTZ, const TimeZoneInfo& italianTZ)
-{
-   Print("\n=== TIME DIFFERENCE CALCULATION ===");
-   
-   int italianCurrentOffset = italianTZ.offsetHours + (italianTZ.isDSTActive ? 1 : 0);
-   int brokerCurrentOffset = brokerTZ.offsetHours + (brokerTZ.isDSTActive ? 1 : 0);
-   int timeDiff = brokerCurrentOffset - italianCurrentOffset;
-   
-   if(timeDiff == 0)
-   {
-      Print("✅ BROKER AND ITALY: SAME TIMEZONE");
-      Print("   No time conversion needed");
-   }
-   else if(timeDiff > 0)
-   {
-      Print("⏰ BROKER IS ", timeDiff, " HOUR(S) AHEAD OF ITALY");
-      SessionConfig config = g_configManager.GetSessionConfig();
-      Print("   Italian ", config.referenceHour1, ":45 = Broker ", (config.referenceHour1 + timeDiff) % 24, ":45");
-   }
-   else
-   {
-      Print("⏰ BROKER IS ", MathAbs(timeDiff), " HOUR(S) BEHIND ITALY");
-      SessionConfig config = g_configManager.GetSessionConfig();
-      Print("   Italian ", config.referenceHour1, ":45 = Broker ", (config.referenceHour1 + timeDiff + 24) % 24, ":45");
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Disegna righe di riferimento                                   |
+//| Disegna righe di riferimento iniziali                          |
 //+------------------------------------------------------------------+
 void DrawInitialReferenceLines()
 {
@@ -458,19 +253,15 @@ void DrawInitialReferenceLines()
    datetime session1TimeBroker = g_timeManager.ConvertItalianToBroker(session1TimeIT);
    datetime session2TimeBroker = g_timeManager.ConvertItalianToBroker(session2TimeIT);
    
-   // Disegna le righe (usando orario broker perché il grafico è in orario broker)
+   // Disegna le righe
    if(session1TimeBroker > 0)
    {
       g_chartVisualizer.DrawReferenceCandle(session1TimeBroker, "Session1");
-      Print("Reference line drawn for Session1 - IT: ", TimeToString(session1TimeIT, TIME_MINUTES),
-            " | Broker: ", TimeToString(session1TimeBroker, TIME_MINUTES));
    }
    
    if(session2TimeBroker > 0)
    {
       g_chartVisualizer.DrawReferenceCandle(session2TimeBroker, "Session2");
-      Print("Reference line drawn for Session2 - IT: ", TimeToString(session2TimeIT, TIME_MINUTES),
-            " | Broker: ", TimeToString(session2TimeBroker, TIME_MINUTES));
    }
 }
 
@@ -491,31 +282,7 @@ datetime CalculateItalianSessionTime(int hour, int minute)
 }
 
 //+------------------------------------------------------------------+
-//| Log status timezone corrente                                   |
-//+------------------------------------------------------------------+
-void LogCurrentTimezoneStatus()
-{
-   if(g_timeManager == NULL) return;
-   
-   datetime brokerTime = g_timeManager.GetBrokerTime();
-   datetime italianTime = g_timeManager.GetItalianTime();
-   TimeZoneInfo brokerTZ = g_timeManager.GetBrokerTimeZone();
-   
-   Print(">>> REALTIME TIMEZONE STATUS <<<");
-   Print("Broker: ", TimeToString(brokerTime, TIME_DATE | TIME_MINUTES | TIME_SECONDS),
-         " (", brokerTZ.timeZoneName, ")");
-   Print("Italy: ", TimeToString(italianTime, TIME_DATE | TIME_MINUTES | TIME_SECONDS),
-         " (Europe/Rome)");
-   
-   bool isTradingDay = g_timeManager.IsTradingDay(italianTime);
-   bool isMarketOpen = g_timeManager.IsMarketOpen(italianTime);
-   
-   Print("Trading Day: ", isTradingDay ? "YES" : "NO");
-   Print("Market Open: ", isMarketOpen ? "YES" : "NO");
-}
-
-//+------------------------------------------------------------------+
-//| Altri metodi esistenti                                         |
+//| Verifica se aggiornare visualizzazione                         |
 //+------------------------------------------------------------------+
 bool ShouldUpdateVisualization(datetime currentTime)
 {
@@ -528,16 +295,20 @@ bool ShouldUpdateVisualization(datetime currentTime)
            currentDt.year != lastUpdateDt.year);
 }
 
+//+------------------------------------------------------------------+
+//| Aggiorna righe di riferimento                                  |
+//+------------------------------------------------------------------+
 void UpdateReferenceLines()
 {
    if(g_chartVisualizer == NULL) return;
    
-   Print("Updating reference lines for new day...");
    g_chartVisualizer.CleanupPreviousDayLines();
    DrawInitialReferenceLines();
-   Print("Reference lines updated successfully");
 }
 
+//+------------------------------------------------------------------+
+//| Ottiene testo motivo deinit                                    |
+//+------------------------------------------------------------------+
 string GetDeinitReasonText(const int reason)
 {
    switch(reason)
