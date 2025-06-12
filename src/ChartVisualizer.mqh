@@ -8,6 +8,7 @@
 #define CHART_VISUALIZER_MQH
 
 #include "Enums.mqh"
+#include "TimeManager.mqh"
 
 //+------------------------------------------------------------------+
 //| ChartVisualizer Class                                           |
@@ -24,6 +25,9 @@ private:
     // Array per tracking oggetti creati
     string m_createdObjects[];
     int    m_objectCount;
+    
+    // TimeManager per calcoli temporali
+    TimeManager* m_timeManager;
 
 public:
     ChartVisualizer();
@@ -32,6 +36,7 @@ public:
     // Main interface
     bool Initialize(color lineColor = clrRed, int lineWidth = 1, ENUM_LINE_STYLE lineStyle = STYLE_SOLID);
     bool DrawReferenceCandle(datetime candleTime, string sessionName = "");
+    bool DrawSessionReferences(int session1Hour, int session1Min, int session2Hour, int session2Min, bool isSummerTime);
     bool CleanupPreviousDayLines();
     bool CleanupAllLines();
     
@@ -47,6 +52,7 @@ public:
 private:
     string GenerateObjectName(datetime candleTime, string sessionName);
     bool CreateVerticalLine(string objectName, datetime time);
+    bool CreateTimeLabel(string labelName, datetime time);
     bool DeleteObject(string objectName);
     bool ShouldCleanupObject(string objectName, datetime currentDate);
     void AddToObjectList(string objectName);
@@ -62,7 +68,8 @@ ChartVisualizer::ChartVisualizer() : m_objectPrefix("BreakoutEA_RefLine_"),
                                     m_lineWidth(1),
                                     m_lineStyle(STYLE_SOLID),
                                     m_lastCleanupDate(0),
-                                    m_objectCount(0)
+                                    m_objectCount(0),
+                                    m_timeManager(NULL)
 {
     ArrayResize(m_createdObjects, 0);
 }
@@ -73,6 +80,13 @@ ChartVisualizer::ChartVisualizer() : m_objectPrefix("BreakoutEA_RefLine_"),
 ChartVisualizer::~ChartVisualizer()
 {
     CleanupAllLines();
+    
+    // Cleanup TimeManager
+    if(m_timeManager != NULL)
+    {
+        delete m_timeManager;
+        m_timeManager = NULL;
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -87,11 +101,89 @@ bool ChartVisualizer::Initialize(color lineColor = clrRed, int lineWidth = 1, EN
     m_lineStyle = lineStyle;
     m_lastCleanupDate = GetDateOnly(TimeCurrent());
     
+    // Inizializza TimeManager interno
+    m_timeManager = new TimeManager();
+    if(m_timeManager == NULL)
+    {
+        Print("ChartVisualizer ERROR: Failed to create TimeManager");
+        return false;
+    }
+    
     // Cleanup eventuali linee precedenti
     CleanupAllLines();
     
     Print("ChartVisualizer: Initialized successfully");
     return true;
+}
+
+//+------------------------------------------------------------------+
+//| Disegna righe di riferimento per entrambe le sessioni          |
+//+------------------------------------------------------------------+
+bool ChartVisualizer::DrawSessionReferences(int session1Hour, int session1Min, int session2Hour, int session2Min, bool isSummerTime)
+{
+    if(m_timeManager == NULL)
+    {
+        Print("ChartVisualizer ERROR: TimeManager not initialized");
+        return false;
+    }
+    
+    Print("ChartVisualizer: Drawing session references...");
+    Print("DST Status: ", isSummerTime ? "SUMMER (+1h)" : "WINTER (base)");
+    
+    bool success = true;
+    
+    // Crea e disegna Session 1
+    datetime session1Time = m_timeManager.CreateBrokerSessionTime(session1Hour, session1Min, isSummerTime);
+    if(session1Time > 0)
+    {
+        if(DrawReferenceCandle(session1Time, "Session1"))
+        {
+            Print("✅ Session1 line: ", TimeToString(session1Time, TIME_DATE | TIME_MINUTES), " broker time");
+            m_timeManager.LogSessionTime("SESSION 1", session1Hour, session1Min, isSummerTime);
+        }
+        else
+        {
+            Print("❌ Failed to draw Session1 line");
+            success = false;
+        }
+    }
+    else
+    {
+        Print("❌ Invalid Session1 time calculated");
+        success = false;
+    }
+    
+    // Crea e disegna Session 2
+    datetime session2Time = m_timeManager.CreateBrokerSessionTime(session2Hour, session2Min, isSummerTime);
+    if(session2Time > 0)
+    {
+        if(DrawReferenceCandle(session2Time, "Session2"))
+        {
+            Print("✅ Session2 line: ", TimeToString(session2Time, TIME_DATE | TIME_MINUTES), " broker time");
+            m_timeManager.LogSessionTime("SESSION 2", session2Hour, session2Min, isSummerTime);
+        }
+        else
+        {
+            Print("❌ Failed to draw Session2 line");
+            success = false;
+        }
+    }
+    else
+    {
+        Print("❌ Invalid Session2 time calculated");
+        success = false;
+    }
+    
+    if(success)
+    {
+        Print("ChartVisualizer: All session references drawn successfully");
+    }
+    else
+    {
+        Print("ChartVisualizer: Some session references failed to draw");
+    }
+    
+    return success;
 }
 
 //+------------------------------------------------------------------+
@@ -194,7 +286,7 @@ string ChartVisualizer::GenerateObjectName(datetime candleTime, string sessionNa
 }
 
 //+------------------------------------------------------------------+
-//| Crea linea verticale sul grafico                               |
+//| Crea linea verticale sul grafico con testo orario              |
 //+------------------------------------------------------------------+
 bool ChartVisualizer::CreateVerticalLine(string objectName, datetime time)
 {
@@ -221,8 +313,53 @@ bool ChartVisualizer::CreateVerticalLine(string objectName, datetime time)
     string description = "Reference Candle: " + TimeToString(time, TIME_DATE | TIME_MINUTES);
     ObjectSetString(0, objectName, OBJPROP_TEXT, description);
     
+    // Crea testo con orario in basso alla linea
+    string textObjectName = objectName + "_Text";
+    if(CreateTimeLabel(textObjectName, time))
+    {
+        Print("ChartVisualizer: Time label created for ", TimeToString(time, TIME_MINUTES));
+    }
+    
     // Refresh chart
     ChartRedraw(0);
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Crea etichetta temporale per la linea verticale                |
+//+------------------------------------------------------------------+
+bool ChartVisualizer::CreateTimeLabel(string labelName, datetime time)
+{
+    // Elimina etichetta se già esiste
+    if(ObjectFind(0, labelName) >= 0)
+        ObjectDelete(0, labelName);
+    
+    // Ottieni range prezzo del grafico per posizionamento
+    double chartHigh = ChartGetDouble(0, CHART_PRICE_MAX);
+    double chartLow = ChartGetDouble(0, CHART_PRICE_MIN);
+    double priceRange = chartHigh - chartLow;
+    
+    // Posiziona testo nel 10% inferiore del grafico
+    double labelPrice = chartLow + (priceRange * 0.10);
+    
+    // Crea oggetto testo
+    if(!ObjectCreate(0, labelName, OBJ_TEXT, 0, time, labelPrice))
+    {
+        Print("ChartVisualizer ERROR: Failed to create time label: ", labelName);
+        return false;
+    }
+    
+    // Imposta proprietà del testo
+    string timeText = TimeToString(time, TIME_MINUTES);  // Solo HH:MM
+    ObjectSetString(0, labelName, OBJPROP_TEXT, timeText);
+    ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
+    ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
+    ObjectSetInteger(0, labelName, OBJPROP_COLOR, m_lineColor);
+    ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, ANCHOR_UPPER);
+    ObjectSetInteger(0, labelName, OBJPROP_BACK, false);  // Sopra il grafico
+    ObjectSetInteger(0, labelName, OBJPROP_SELECTABLE, false);
+    ObjectSetInteger(0, labelName, OBJPROP_HIDDEN, true);
     
     return true;
 }
@@ -232,21 +369,35 @@ bool ChartVisualizer::CreateVerticalLine(string objectName, datetime time)
 //+------------------------------------------------------------------+
 bool ChartVisualizer::DeleteObject(string objectName)
 {
+    bool success = true;
+    
+    // Elimina linea principale
     if(ObjectFind(0, objectName) >= 0)
     {
-        if(ObjectDelete(0, objectName))
-        {
-            ChartRedraw(0);
-            return true;
-        }
-        else
+        if(!ObjectDelete(0, objectName))
         {
             Print("ChartVisualizer WARNING: Failed to delete object: ", objectName);
-            return false;
+            success = false;
         }
     }
     
-    return true;  // Oggetto non esisteva, considerato successo
+    // Elimina etichetta associata
+    string textObjectName = objectName + "_Text";
+    if(ObjectFind(0, textObjectName) >= 0)
+    {
+        if(!ObjectDelete(0, textObjectName))
+        {
+            Print("ChartVisualizer WARNING: Failed to delete text label: ", textObjectName);
+            success = false;
+        }
+    }
+    
+    if(success)
+    {
+        ChartRedraw(0);
+    }
+    
+    return success;
 }
 
 //+------------------------------------------------------------------+

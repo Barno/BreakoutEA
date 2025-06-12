@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                               BreakoutEA.mq5    |
+//|                                               BEN Strategy.mq5    |
 //|                                  Strategia Breakout Bidirezionale |
-//|                                                                   |
+//|                                  Broker Time System - Simplified |
 //+------------------------------------------------------------------+
-#property copyright "BreakoutEA Team"
-#property version   "1.00"
-#property description "Strategia Breakout Bidirezionale"
+#property copyright "Ben Team"
+#property version   "0.0.10"
+#property description "Strategia Breakout Bidirezionale - Broker Time System"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -14,18 +14,17 @@
 #include "Enums.mqh"
 #include "ConfigManager.mqh"
 #include "ChartVisualizer.mqh"
-#include "TimeManager.mqh"
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
 //+------------------------------------------------------------------+
-input group "=== CANDELE DI RIFERIMENTO ORARIO ITA ==="
-input int CandeleRiferimento_Ora1 = 8;           
-input int CandeleRiferimento_Minuti1 = 45;       
-input int CandeleRiferimento_Ora2 = 15;          
-input int CandeleRiferimento_Minuti2 = 15;       
+input group "=== SESSIONI (Orario Base Inverno) ==="
+input int Session1_Hour = 8;                    
+input int Session1_Minute = 45;       
+input int Session2_Hour = 14;                   
+input int Session2_Minute = 45;       
 input ENUM_TIMEFRAMES TimeframeRiferimento = PERIOD_M15;
-input color ColoreLineaVerticale = clrRed;        
+input bool IsSummerTime = true;                 // Flag: +1 ora per ora legale (da abilitare d'Estate)
 
 input group "=== GESTIONE DEL RISCHIO ==="
 input double RischioPercentuale = 0.5;           
@@ -41,7 +40,7 @@ input double TP2_RiskReward = 3.0;
 input double TP2_PercentualeVolume = 50.0;      
 input bool AttivareBreakevenDopoTP = true;      
 
-input group "=== CALENDARIO TRADING ==="
+input group "=== GIORNI DI TRADING TRADING ==="
 input bool TradingLunedi = true;                
 input bool TradingMartedi = true;               
 input bool TradingMercoledi = true;             
@@ -50,20 +49,16 @@ input bool TradingVenerdi = true;
 input bool TradingSabato = false;               
 input bool TradingDomenica = false;             
 
-input group "=== VISUALIZZAZIONE ==="
+input group "=== VISUALIZZAZIONE CANDELA RIFERIMENTO==="
 input int LineWidth = 1;                        
-input ENUM_LINE_STYLE LineStyle = STYLE_SOLID;  
-
-input group "=== TIME MANAGEMENT ==="
-input int OffsetBroker_Ore = 0;                 // Offset manuale broker (fallback)
-input bool EnableAutoDetection = true;          // Abilita auto-detection timezone
+input ENUM_LINE_STYLE LineStyle = STYLE_SOLID;
+input color ColoreLineaVerticale = clrRed;    
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                 |
 //+------------------------------------------------------------------+
 ConfigManager* g_configManager = NULL;
 ChartVisualizer* g_chartVisualizer = NULL;
-TimeManager* g_timeManager = NULL;
 
 bool g_isInitialized = false;
 datetime g_lastVisualizationUpdate = 0;
@@ -74,22 +69,19 @@ datetime g_lastCleanupCheck = 0;
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("🚀 BreakoutEA v1.0 - Initializing...");
+   
+   Print("🚀 BenStrategy v1.20 - Broker Time System");
    Print("Symbol: ", Symbol(), " | Timeframe: ", EnumToString(Period()));
    
    g_isInitialized = false;
+   
+   // Log configurazione sessioni
+   LogSessionConfiguration();
    
    // Inizializza ConfigManager
    if(!InitializeConfigManager())
    {
       Print("ERROR: ConfigManager initialization failed");
-      return(INIT_FAILED);
-   }
-   
-   // Inizializza TimeManager
-   if(!InitializeTimeManager())
-   {
-      Print("ERROR: TimeManager initialization failed");
       return(INIT_FAILED);
    }
    
@@ -130,12 +122,6 @@ void OnDeinit(const int reason)
       g_chartVisualizer.CleanupAllLines();
       delete g_chartVisualizer;
       g_chartVisualizer = NULL;
-   }
-   
-   if(g_timeManager != NULL)
-   {
-      delete g_timeManager;
-      g_timeManager = NULL;
    }
    
    if(g_configManager != NULL)
@@ -193,6 +179,25 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
+//| Log configurazione sessioni                                    |
+//+------------------------------------------------------------------+
+void LogSessionConfiguration()
+{
+   Print("=== SESSION CONFIGURATION ===");
+   Print("DST Status: ", IsSummerTime ? "SUMMER (+1h)" : "WINTER (base)");
+   Print("Current Broker Time: ", TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES));
+   
+   // Log calcoli
+   int session1ActualHour = (Session1_Hour + (IsSummerTime ? 1 : 0)) % 24;
+   int session2ActualHour = (Session2_Hour + (IsSummerTime ? 1 : 0)) % 24;
+   
+   Print("Session 1 - Base: ", Session1_Hour, ":", StringFormat("%02d", Session1_Minute),
+         " | Actual: ", session1ActualHour, ":", StringFormat("%02d", Session1_Minute), " broker time");
+   Print("Session 2 - Base: ", Session2_Hour, ":", StringFormat("%02d", Session2_Minute),
+         " | Actual: ", session2ActualHour, ":", StringFormat("%02d", Session2_Minute), " broker time");
+}
+
+//+------------------------------------------------------------------+
 //| Inizializza ConfigManager                                       |
 //+------------------------------------------------------------------+
 bool InitializeConfigManager()
@@ -200,10 +205,15 @@ bool InitializeConfigManager()
    g_configManager = new ConfigManager();
    if(g_configManager == NULL) return false;
    
+   // Usa orari effettivi (con DST applicato)
+   int session1Hour = (Session1_Hour + (IsSummerTime ? 1 : 0)) % 24;
+   int session1Minute = Session1_Minute;
+   int session2Hour = (Session2_Hour + (IsSummerTime ? 1 : 0)) % 24;
+   int session2Minute = Session2_Minute;
+   
    if(!g_configManager.LoadParameters(
       RischioPercentuale, LevaBroker, SpreadBufferPips, MaxSpreadPips,
-      CandeleRiferimento_Ora1, CandeleRiferimento_Minuti1, 
-      CandeleRiferimento_Ora2, CandeleRiferimento_Minuti2, TimeframeRiferimento,
+      session1Hour, session1Minute, session2Hour, session2Minute, TimeframeRiferimento,
       NumeroTakeProfit, TP1_RiskReward, TP1_PercentualeVolume, 
       TP2_RiskReward, TP2_PercentualeVolume, AttivareBreakevenDopoTP,
       TradingLunedi, TradingMartedi, TradingMercoledi, TradingGiovedi, 
@@ -211,18 +221,6 @@ bool InitializeConfigManager()
       return false;
    
    return g_configManager.ValidateParameters();
-}
-
-//+------------------------------------------------------------------+
-//| Inizializza TimeManager                                         |
-//+------------------------------------------------------------------+
-bool InitializeTimeManager()
-{
-   g_timeManager = new TimeManager();
-   if(g_timeManager == NULL) return false;
-   
-   g_timeManager.EnableAutoDetection(EnableAutoDetection);
-   return g_timeManager.Initialize(OffsetBroker_Ore);
 }
 
 //+------------------------------------------------------------------+
@@ -241,44 +239,13 @@ bool InitializeChartVisualizer()
 //+------------------------------------------------------------------+
 void DrawInitialReferenceLines()
 {
-   if(g_configManager == NULL || g_chartVisualizer == NULL || g_timeManager == NULL) return;
+   if(g_configManager == NULL || g_chartVisualizer == NULL) return;
    
-   SessionConfig sessionConfig = g_configManager.GetSessionConfig();
-   
-   // Calcola tempi sessioni in orario italiano
-   datetime session1TimeIT = CalculateItalianSessionTime(sessionConfig.referenceHour1, sessionConfig.referenceMinute1);
-   datetime session2TimeIT = CalculateItalianSessionTime(sessionConfig.referenceHour2, sessionConfig.referenceMinute2);
-   
-   // Converti in orario broker per il disegno
-   datetime session1TimeBroker = g_timeManager.ConvertItalianToBroker(session1TimeIT);
-   datetime session2TimeBroker = g_timeManager.ConvertItalianToBroker(session2TimeIT);
-   
-   // Disegna le righe
-   if(session1TimeBroker > 0)
-   {
-      g_chartVisualizer.DrawReferenceCandle(session1TimeBroker, "Session1");
-   }
-   
-   if(session2TimeBroker > 0)
-   {
-      g_chartVisualizer.DrawReferenceCandle(session2TimeBroker, "Session2");
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Calcola tempo sessione italiana                                |
-//+------------------------------------------------------------------+
-datetime CalculateItalianSessionTime(int hour, int minute)
-{
-   datetime currentItalian = g_timeManager.GetItalianTime();
-   MqlDateTime dt;
-   TimeToStruct(currentItalian, dt);
-   
-   dt.hour = hour;
-   dt.min = minute;
-   dt.sec = 0;
-   
-   return StructToTime(dt);
+   // Usa il nuovo metodo del ChartVisualizer
+   g_chartVisualizer.DrawSessionReferences(
+      Session1_Hour, Session1_Minute,
+      Session2_Hour, Session2_Minute, 
+      IsSummerTime);
 }
 
 //+------------------------------------------------------------------+
@@ -302,8 +269,10 @@ void UpdateReferenceLines()
 {
    if(g_chartVisualizer == NULL) return;
    
+   Print("Updating reference lines for new day...");
    g_chartVisualizer.CleanupPreviousDayLines();
    DrawInitialReferenceLines();
+   Print("Reference lines updated successfully");
 }
 
 //+------------------------------------------------------------------+
