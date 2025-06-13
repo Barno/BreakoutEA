@@ -10,20 +10,6 @@
 #include "Enums.mqh"
 
 //+------------------------------------------------------------------+
-//| Strutture per configurazione Telegram                          |
-//+------------------------------------------------------------------+
-struct TelegramConfig
-{
-    string botToken;        // Token bot Telegram
-    string chatID;          // Chat ID destinazione
-    bool enabled;           // Se notifiche sono abilitate
-    int maxRetries;         // Tentativi massimi per messaggio
-    int retryDelay;         // Delay tra tentativi (millisecondi)
-    
-    TelegramConfig() : botToken(""), chatID(""), enabled(false), maxRetries(3), retryDelay(1000) {}
-};
-
-//+------------------------------------------------------------------+
 //| TelegramLogger Class - Versione Base                           |
 //+------------------------------------------------------------------+
 class TelegramLogger

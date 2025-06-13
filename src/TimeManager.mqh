@@ -9,20 +9,6 @@
 
 #include "Enums.mqh"
 
-//+------------------------------------------------------------------+
-//| Strutture per gestione tempo                                    |
-//+------------------------------------------------------------------+
-struct TradingHours
-{
-    int startHour;          // Ora inizio trading
-    int startMinute;        // Minuto inizio trading
-    int endHour;            // Ora fine trading  
-    int endMinute;          // Minuto fine trading
-    bool isActive;          // Se questo orario è attivo
-    
-    TradingHours() : startHour(0), startMinute(0), endHour(23), endMinute(59), isActive(true) {}
-    TradingHours(int sH, int sM, int eH, int eM) : startHour(sH), startMinute(sM), endHour(eH), endMinute(eM), isActive(true) {}
-};
 
 //+------------------------------------------------------------------+
 //| TimeManager Class - Broker Time System                         |
