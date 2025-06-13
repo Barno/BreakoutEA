@@ -1,7 +1,8 @@
 //+------------------------------------------------------------------+
-//|                                             MarginCalculator.mqh |
-//|                                       Risk & Margin Management   |
-//|                                              SOLID Architecture  |
+//|                                         MarginCalculator.mqh    |
+//|                              Enhanced Position Sizing Engine     |
+//|                              Based on EarnForex Position Sizer   |
+//|                              HYBRID APPROACH - Risk Management   |
 //+------------------------------------------------------------------+
 
 #ifndef MARGIN_CALCULATOR_MQH
@@ -10,110 +11,91 @@
 #include "Enums.mqh"
 
 //+------------------------------------------------------------------+
-//| Strutture per Margin Information (AssetInfo è in Enums.mqh)   |
+//| ✅ RIMOSSE STRUCT DUPLICATE (ora in Enums.mqh)                 |
 //+------------------------------------------------------------------+
-struct MarginInfo
-{
-    double requiredMargin;      // Margine richiesto
-    double availableMargin;     // Margine disponibile
-    double marginLevel;         // Livello margine %
-    double utilizationPercent;  // % utilizzo del margine disponibile
-    bool canOpenPosition;       // Se possiamo aprire posizione
-    string limitReason;         // Motivo limitazione se any
-    
-    MarginInfo() : requiredMargin(0), availableMargin(0), marginLevel(0),
-                   utilizationPercent(0), canOpenPosition(false), limitReason("") {}
-};
+// MarginInfo, PositionSizeInfo ora in Enums.mqh
 
 //+------------------------------------------------------------------+
-//| Interface per Margin Calculator (SOLID - Dependency Inversion) |
+//| Enhanced MarginCalculator Class                                 |
 //+------------------------------------------------------------------+
-class IMarginCalculator
-{
-public:
-    virtual double GetRequiredMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType) = 0;
-    virtual double GetAvailableMargin() = 0;
-    virtual bool CanOpenPosition(const string symbol, double lots, ENUM_ORDER_TYPE orderType) = 0;
-    virtual MarginInfo GetMarginAnalysis(const string symbol, double lots, ENUM_ORDER_TYPE orderType) = 0;
-    virtual AssetInfo GetAssetInfo(const string symbol) = 0;
-};
-
-//+------------------------------------------------------------------+
-//| MarginCalculator Class - Main Implementation                   |
-//+------------------------------------------------------------------+
-class MarginCalculator : public IMarginCalculator
+class MarginCalculator
 {
 private:
-    string m_lastError;                    // Ultimo errore
-    double m_safetyMarginPercent;         // % margine di sicurezza
-    double m_maxMarginUtilization;        // Max % utilizzo margine
+    string m_lastError;          // Ultimo errore
+    double m_lastCalculation;    // Ultimo calcolo position size
+    datetime m_lastUpdateTime;   // Ultimo aggiornamento
     
     // Cache per performance
-    AssetInfo m_cachedAssetInfo;
+    double m_cachedTickValue;
+    double m_cachedTickSize;
     string m_cachedSymbol;
     datetime m_cacheTime;
     
+    // ✅ AGGIUNTO: Safety settings
+    double m_safetyMarginPercent;
+    double m_maxMarginUtilization;
+
 public:
     MarginCalculator();
     ~MarginCalculator();
     
-    // Main Interface Implementation (IMarginCalculator)
-    virtual double GetRequiredMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType) override;
-    virtual double GetAvailableMargin() override;
-    virtual bool CanOpenPosition(const string symbol, double lots, ENUM_ORDER_TYPE orderType) override;
-    virtual MarginInfo GetMarginAnalysis(const string symbol, double lots, ENUM_ORDER_TYPE orderType) override;
-    virtual AssetInfo GetAssetInfo(const string symbol) override;
+    // === MAIN POSITION SIZING (EarnForex Style) ===
+    double CalculatePositionSize(const string symbol, double riskPercent, double slPips, double accountSize = 0);
+    double CalculatePositionSizeMoney(const string symbol, double riskMoney, double slPips);
+    PositionSizeInfo GetPositionSizeInfo(const string symbol, double riskPercent, double slPips, double accountSize = 0);
     
-    // Enhanced Features (Nostre Innovazioni)
-    double GetMarginUtilizationPercent(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
+    // === MARGIN ANALYSIS ===
+    MarginInfo GetMarginAnalysis(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
+    double GetRequiredMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
+    double GetAvailableMargin();
+    bool CanOpenPosition(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
     double CalculateMaxLotsForMargin(const string symbol, ENUM_ORDER_TYPE orderType, double marginPercent = 80.0);
-    double GetMarginRequirementForRisk(const string symbol, double riskPercent, double stopLossPoints);
-    bool ValidateMarginSafety(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
     
-    // Configuration
+    // === SYMBOL ANALYSIS ===
+    double GetTickValue(const string symbol);
+    double GetTickSize(const string symbol);
+    double GetPipValue(const string symbol, double lots = 1.0);
+    AssetType DetectAssetType(const string symbol);
+    
+    // === VALIDATION & UTILITIES ===
+    double NormalizeVolume(const string symbol, double volume);
+    bool ValidatePositionSize(const string symbol, double lots);
+    double ConvertSLPipsToPoints(const string symbol, double slPips);
+    
+    // ✅ AGGIUNTO: Safety Configuration
     void SetSafetyMarginPercent(double percent) { m_safetyMarginPercent = percent; }
     void SetMaxMarginUtilization(double percent) { m_maxMarginUtilization = percent; }
     double GetSafetyMarginPercent() const { return m_safetyMarginPercent; }
+    double GetMaxMarginUtilization() const { return m_maxMarginUtilization; }
     
-    // Info & Status
+    // === INFO ===
     string GetLastError() const { return m_lastError; }
-    void ClearCache();
+    double GetLastCalculation() const { return m_lastCalculation; }
+    datetime GetLastUpdateTime() const { return m_lastUpdateTime; }
 
 private:
-    // Core Calculation Methods
-    AssetInfo DetectAssetProperties(const string symbol);
-    double CalculateForexMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
-    double CalculateIndexMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
-    double CalculateCryptoMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
-    double CalculateCommodityMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType);
-    
-    // Asset Detection & Utilities
-    AssetType IdentifyAssetType(const string symbol);
-    double GetSymbolContractSize(const string symbol);
-    double GetSymbolMarginRate(const string symbol);
-    double GetCurrentPrice(const string symbol, ENUM_ORDER_TYPE orderType);
-    
-    // Validation & Error Handling
-    bool ValidateSymbol(const string symbol);
-    bool ValidateLots(double lots);
-    bool ValidateOrderType(ENUM_ORDER_TYPE orderType);
+    // === CORE CALCULATIONS (EarnForex Formula) ===
+    double CalculateRiskAndPositionSize(const string symbol, double riskMoney, double slDistance);
+    bool UpdateSymbolCache(const string symbol);
     void SetError(const string error);
-    
-    // Cache Management
-    bool IsCacheValid(const string symbol);
-    void UpdateCache(const string symbol, const AssetInfo& info);
+    double GetAccountSize();
+    bool IsValidSymbol(const string symbol);
+    double CalculateSlDistanceInPoints(const string symbol, double slPips);
 };
 
 //+------------------------------------------------------------------+
 //| Constructor                                                      |
 //+------------------------------------------------------------------+
 MarginCalculator::MarginCalculator() : m_lastError(""),
-                                      m_safetyMarginPercent(20.0),
-                                      m_maxMarginUtilization(80.0),
+                                      m_lastCalculation(0),
+                                      m_lastUpdateTime(0),
+                                      m_cachedTickValue(0),
+                                      m_cachedTickSize(0),
                                       m_cachedSymbol(""),
-                                      m_cacheTime(0)
+                                      m_cacheTime(0),
+                                      m_safetyMarginPercent(20.0),
+                                      m_maxMarginUtilization(80.0)
 {
-    Print("MarginCalculator: Initialized with safety margin ", m_safetyMarginPercent, "%");
 }
 
 //+------------------------------------------------------------------+
@@ -124,99 +106,122 @@ MarginCalculator::~MarginCalculator()
 }
 
 //+------------------------------------------------------------------+
-//| Calcola margine richiesto per posizione                        |
+//| MAIN: Calcola position size basato su risk % (EarnForex Style) |
 //+------------------------------------------------------------------+
-double MarginCalculator::GetRequiredMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
+double MarginCalculator::CalculatePositionSize(const string symbol, double riskPercent, double slPips, double accountSize = 0)
 {
-    // Validazione input
-    if(!ValidateSymbol(symbol) || !ValidateLots(lots) || !ValidateOrderType(orderType))
+    if(accountSize == 0) accountSize = GetAccountSize();
+    if(accountSize <= 0)
     {
-        return -1;
-    }
-    
-    // Ottieni info asset
-    AssetInfo assetInfo = GetAssetInfo(symbol);
-    if(assetInfo.type == ASSET_UNKNOWN)
-    {
-        SetError("Unknown asset type for symbol: " + symbol);
-        return -1;
-    }
-    
-    double requiredMargin = 0;
-    
-    // Calcola margine basato sul tipo asset
-    switch(assetInfo.type)
-    {
-        case ASSET_FOREX:
-            requiredMargin = CalculateForexMargin(symbol, lots, orderType);
-            break;
-        case ASSET_INDICES:
-            requiredMargin = CalculateIndexMargin(symbol, lots, orderType);
-            break;
-        case ASSET_CRYPTO:
-            requiredMargin = CalculateCryptoMargin(symbol, lots, orderType);
-            break;
-        case ASSET_COMMODITY:
-            requiredMargin = CalculateCommodityMargin(symbol, lots, orderType);
-            break;
-        default:
-            SetError("Unsupported asset type");
-            return -1;
-    }
-    
-    if(requiredMargin > 0)
-    {
-        Print("MarginCalculator: Required margin for ", lots, " lots of ", symbol, " = ", 
-              DoubleToString(requiredMargin, 2), " ", AccountInfoString(ACCOUNT_CURRENCY));
-    }
-    
-    return requiredMargin;
-}
-
-//+------------------------------------------------------------------+
-//| Ottiene margine disponibile                                    |
-//+------------------------------------------------------------------+
-double MarginCalculator::GetAvailableMargin()
-{
-    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-    
-    if(freeMargin < 0)
-    {
-        SetError("Cannot retrieve account free margin");
+        SetError("Invalid account size");
         return 0;
     }
     
-    Print("MarginCalculator: Available margin = ", DoubleToString(freeMargin, 2), 
-          " ", AccountInfoString(ACCOUNT_CURRENCY));
+    // Calcola importo rischio in denaro
+    double riskMoney = accountSize * riskPercent / 100.0;
     
-    return freeMargin;
+    return CalculatePositionSizeMoney(symbol, riskMoney, slPips);
 }
 
 //+------------------------------------------------------------------+
-//| Verifica se possiamo aprire posizione                          |
+//| MAIN: Calcola position size basato su importo fisso           |
 //+------------------------------------------------------------------+
-bool MarginCalculator::CanOpenPosition(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
+double MarginCalculator::CalculatePositionSizeMoney(const string symbol, double riskMoney, double slPips)
 {
-    double requiredMargin = GetRequiredMargin(symbol, lots, orderType);
-    if(requiredMargin <= 0) return false;
+    if(riskMoney <= 0)
+    {
+        SetError("Risk money must be positive");
+        return 0;
+    }
     
-    double availableMargin = GetAvailableMargin();
-    if(availableMargin <= 0) return false;
+    if(slPips <= 0)
+    {
+        SetError("Stop loss pips must be positive");
+        return 0;
+    }
     
-    // Applica safety margin
-    double safetyAdjustedMargin = availableMargin * (100.0 - m_safetyMarginPercent) / 100.0;
+    // Converti SL da pips a points
+    double slDistance = CalculateSlDistanceInPoints(symbol, slPips);
+    if(slDistance <= 0)
+    {
+        SetError("Invalid SL distance calculation");
+        return 0;
+    }
     
-    bool canOpen = requiredMargin <= safetyAdjustedMargin;
+    // Usa formula EarnForex
+    double positionSize = CalculateRiskAndPositionSize(symbol, riskMoney, slDistance);
     
-    Print("MarginCalculator: Can open position? ", canOpen ? "YES" : "NO",
-          " (Required: ", DoubleToString(requiredMargin, 2),
-          ", Available: ", DoubleToString(safetyAdjustedMargin, 2), ")");
+    if(positionSize > 0)
+    {
+        // Normalizza volume secondo vincoli del simbolo
+        positionSize = NormalizeVolume(symbol, positionSize);
+        m_lastCalculation = positionSize;
+        m_lastUpdateTime = TimeCurrent();
+    }
     
-    return canOpen;
+    return positionSize;
 }
 
 //+------------------------------------------------------------------+
-//| Analisi completa margine                                       |
+//| Ottiene informazioni complete position sizing                  |
+//+------------------------------------------------------------------+
+PositionSizeInfo MarginCalculator::GetPositionSizeInfo(const string symbol, double riskPercent, double slPips, double accountSize = 0)
+{
+    PositionSizeInfo info;
+    
+    if(accountSize == 0) accountSize = GetAccountSize();
+    info.riskAmount = accountSize * riskPercent / 100.0;
+    info.stopLossPoints = CalculateSlDistanceInPoints(symbol, slPips);
+    info.tickValue = GetTickValue(symbol);
+    info.tickSize = GetTickSize(symbol);
+    
+    info.totalLots = CalculatePositionSize(symbol, riskPercent, slPips, accountSize);
+    
+    if(info.totalLots > 0)
+    {
+        info.isValid = true;
+        info.SyncFields(); // ✅ Sync compatibility fields
+    }
+    else
+    {
+        info.errorReason = m_lastError;
+        info.SyncFields(); // ✅ Sync compatibility fields
+    }
+    
+    return info;
+}
+
+//+------------------------------------------------------------------+
+//| CORE: Formula EarnForex Position Sizer                         |
+//+------------------------------------------------------------------+
+double MarginCalculator::CalculateRiskAndPositionSize(const string symbol, double riskMoney, double slDistance)
+{
+    if(!UpdateSymbolCache(symbol)) return 0;
+    
+    double tickValue = m_cachedTickValue;
+    double tickSize = m_cachedTickSize;
+    
+    if(tickValue <= 0 || tickSize <= 0)
+    {
+        SetError("Invalid tick value or tick size for symbol: " + symbol);
+        return 0;
+    }
+    
+    // FORMULA EARNFOREX:
+    // PositionSize = RiskMoney / (StopLoss * UnitCost / TickSize)
+    double positionSize = riskMoney / (slDistance * tickValue / tickSize);
+    
+    if(positionSize < 0 || !MathIsValidNumber(positionSize))
+    {
+        SetError("Invalid position size calculation result");
+        return 0;
+    }
+    
+    return positionSize;
+}
+
+//+------------------------------------------------------------------+
+//| Analisi margine completa                                       |
 //+------------------------------------------------------------------+
 MarginInfo MarginCalculator::GetMarginAnalysis(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
 {
@@ -225,244 +230,322 @@ MarginInfo MarginCalculator::GetMarginAnalysis(const string symbol, double lots,
     info.requiredMargin = GetRequiredMargin(symbol, lots, orderType);
     info.availableMargin = GetAvailableMargin();
     
-    if(info.requiredMargin > 0 && info.availableMargin > 0)
+    double currentUsedMargin = AccountInfoDouble(ACCOUNT_MARGIN);
+    info.futureUsedMargin = currentUsedMargin + info.requiredMargin;
+    
+    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    if(equity > 0)
     {
-        info.utilizationPercent = (info.requiredMargin / info.availableMargin) * 100.0;
-        info.marginLevel = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
-        
-        // Determina se possiamo aprire
-        double safetyAdjustedMargin = info.availableMargin * (100.0 - m_safetyMarginPercent) / 100.0;
-        info.canOpenPosition = info.requiredMargin <= safetyAdjustedMargin;
-        
-        if(!info.canOpenPosition)
-        {
-            if(info.requiredMargin > info.availableMargin)
-                info.limitReason = "Insufficient margin";
-            else
-                info.limitReason = "Safety margin limit (" + DoubleToString(m_safetyMarginPercent, 1) + "%)";
-        }
+        info.marginUtilization = (info.futureUsedMargin / equity) * 100.0;
     }
-    else
+    
+    info.canOpenPosition = CanOpenPosition(symbol, lots, orderType);
+    
+    if(!info.canOpenPosition)
     {
-        info.canOpenPosition = false;
-        info.limitReason = "Calculation error";
+        info.lastError = m_lastError;
     }
     
     return info;
 }
 
 //+------------------------------------------------------------------+
-//| Ottiene informazioni asset                                     |
+//| Calcola margine richiesto per posizione                       |
 //+------------------------------------------------------------------+
-AssetInfo MarginCalculator::GetAssetInfo(const string symbol)
+double MarginCalculator::GetRequiredMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
 {
-    // Controlla cache
-    if(IsCacheValid(symbol))
+    if(!IsValidSymbol(symbol))
     {
-        return m_cachedAssetInfo;
+        SetError("Invalid symbol: " + symbol);
+        return 0;
     }
     
-    // Rileva proprietà asset
-    AssetInfo info = DetectAssetProperties(symbol);
+    if(lots <= 0)
+    {
+        SetError("Lots must be positive");
+        return 0;
+    }
     
-    // Aggiorna cache
-    UpdateCache(symbol, info);
+    // Usa OrderCalcMargin per calcolo preciso
+    double margin = 0;
+    double price = (orderType == ORDER_TYPE_BUY) ? 
+                   SymbolInfoDouble(symbol, SYMBOL_ASK) : 
+                   SymbolInfoDouble(symbol, SYMBOL_BID);
     
-    return info;
+    if(price <= 0)
+    {
+        SetError("Invalid price for symbol: " + symbol);
+        return 0;
+    }
+    
+    if(!OrderCalcMargin(orderType, symbol, lots, price, margin))
+    {
+        SetError("OrderCalcMargin failed for " + symbol + " error: " + IntegerToString(GetLastError()));
+        return 0;
+    }
+    
+    return margin;
 }
 
 //+------------------------------------------------------------------+
-//| Calcola percentuale utilizzo margine                           |
+//| Ottiene margine disponibile                                    |
 //+------------------------------------------------------------------+
-double MarginCalculator::GetMarginUtilizationPercent(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
+double MarginCalculator::GetAvailableMargin()
+{
+    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double usedMargin = AccountInfoDouble(ACCOUNT_MARGIN);
+    
+    return MathMax(0, equity - usedMargin);
+}
+
+//+------------------------------------------------------------------+
+//| Verifica se posizione può essere aperta                       |
+//+------------------------------------------------------------------+
+bool MarginCalculator::CanOpenPosition(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
 {
     double requiredMargin = GetRequiredMargin(symbol, lots, orderType);
+    if(requiredMargin <= 0) return false;
+    
     double availableMargin = GetAvailableMargin();
     
-    if(requiredMargin <= 0 || availableMargin <= 0) return 0;
+    // Safety margin: usa solo % configurabile del margine disponibile
+    bool canOpen = (requiredMargin <= availableMargin * (100.0 - m_safetyMarginPercent) / 100.0);
     
-    return (requiredMargin / availableMargin) * 100.0;
+    if(!canOpen)
+    {
+        SetError(StringFormat("Insufficient margin. Required: %.2f, Available: %.2f (Safety: %.1f%%)", 
+                              requiredMargin, availableMargin, m_safetyMarginPercent));
+    }
+    
+    return canOpen;
 }
 
 //+------------------------------------------------------------------+
-//| Calcola lotti massimi per percentuale margine                  |
+//| Calcola massimi lotti per percentuale margine                 |
 //+------------------------------------------------------------------+
 double MarginCalculator::CalculateMaxLotsForMargin(const string symbol, ENUM_ORDER_TYPE orderType, double marginPercent = 80.0)
 {
-    double availableMargin = GetAvailableMargin();
-    if(availableMargin <= 0) return 0;
+    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double maxMargin = equity * marginPercent / 100.0;
     
-    double targetMargin = availableMargin * marginPercent / 100.0;
+    // Prova con 1 lotto per ottenere margine base
+    double marginPerLot = GetRequiredMargin(symbol, 1.0, orderType);
+    if(marginPerLot <= 0) return 0;
     
-    // Test con 1 lotto per ottenere ratio
-    double testMargin = GetRequiredMargin(symbol, 1.0, orderType);
-    if(testMargin <= 0) return 0;
+    double maxLots = maxMargin / marginPerLot;
     
-    double maxLots = targetMargin / testMargin;
-    
-    // Arrotonda al minimo step size del broker
-    double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-    double stepLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-    
-    maxLots = MathFloor(maxLots / stepLot) * stepLot;
-    maxLots = MathMax(maxLots, minLot);
-    
-    Print("MarginCalculator: Max lots for ", marginPercent, "% margin = ", DoubleToString(maxLots, 2));
-    
-    return maxLots;
+    return NormalizeVolume(symbol, maxLots);
 }
 
 //+------------------------------------------------------------------+
-//| Implementazione metodi privati                                 |
+//| Ottiene tick value con cache                                  |
 //+------------------------------------------------------------------+
-
-AssetInfo MarginCalculator::DetectAssetProperties(const string symbol)
+double MarginCalculator::GetTickValue(const string symbol)
 {
-    AssetInfo info;
-    info.type = IdentifyAssetType(symbol);
-    info.contractSize = GetSymbolContractSize(symbol);
-    info.tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-    info.tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-    info.marginRate = GetSymbolMarginRate(symbol);
-    info.digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-    
-    // ✅ Inizializza anche i nuovi campi
-    info.baseSymbol = "";
-    info.quoteSymbol = "";
-    info.pointValue = (info.tickSize > 0) ? (info.tickValue / info.tickSize) : info.tickValue;
-    info.baseQuoteCurrency = ""; // Verrà popolato da AssetDetector se usato
-    
-    return info;
+    if(!UpdateSymbolCache(symbol)) return 0;
+    return m_cachedTickValue;
 }
 
-AssetType MarginCalculator::IdentifyAssetType(const string symbol)
+//+------------------------------------------------------------------+
+//| Ottiene tick size con cache                                   |
+//+------------------------------------------------------------------+
+double MarginCalculator::GetTickSize(const string symbol)
 {
-    // Identificazione base per MVP
-    string upperSymbol = symbol;
-    StringToUpper(upperSymbol);
+    if(!UpdateSymbolCache(symbol)) return 0;
+    return m_cachedTickSize;
+}
+
+//+------------------------------------------------------------------+
+//| Calcola pip value per lots                                    |
+//+------------------------------------------------------------------+
+double MarginCalculator::GetPipValue(const string symbol, double lots = 1.0)
+{
+    double tickValue = GetTickValue(symbol);
+    double tickSize = GetTickSize(symbol);
+    
+    if(tickValue <= 0 || tickSize <= 0) return 0;
+    
+    // Per Forex: 1 pip = 10 ticks (per simboli 5-digit)
+    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    double pipMultiplier = (digits == 5 || digits == 3) ? 10.0 : 1.0;
+    
+    return (tickValue / tickSize) * pipMultiplier * lots;
+}
+
+//+------------------------------------------------------------------+
+//| Rileva tipo asset automaticamente                             |
+//+------------------------------------------------------------------+
+AssetType MarginCalculator::DetectAssetType(const string symbol)
+{
+    string sym = symbol; // ✅ FIX: Non usare StringToUpper sulla reference
+    StringToUpper(sym);   // ✅ FIX: Modifica la copia
     
     // Forex patterns
-    if(StringLen(symbol) >= 6 && StringLen(symbol) <= 7)
+    if(StringLen(sym) == 6 || StringLen(sym) == 7)
     {
-        if(StringFind(upperSymbol, "USD") >= 0 || StringFind(upperSymbol, "EUR") >= 0 ||
-           StringFind(upperSymbol, "GBP") >= 0 || StringFind(upperSymbol, "JPY") >= 0)
+        // Check common currency codes
+        if(StringFind(sym, "USD") >= 0 || StringFind(sym, "EUR") >= 0 || 
+           StringFind(sym, "GBP") >= 0 || StringFind(sym, "JPY") >= 0 ||
+           StringFind(sym, "CHF") >= 0 || StringFind(sym, "CAD") >= 0 ||
+           StringFind(sym, "AUD") >= 0 || StringFind(sym, "NZD") >= 0)
+        {
             return ASSET_FOREX;
+        }
+    }
+    
+    // Crypto patterns
+    if(StringFind(sym, "BTC") >= 0 || StringFind(sym, "ETH") >= 0 || 
+       StringFind(sym, "CRYPTO") >= 0 || StringFind(sym, "COIN") >= 0)
+    {
+        return ASSET_CRYPTO;
     }
     
     // Indices patterns
-    if(StringFind(upperSymbol, "DAX") >= 0 || StringFind(upperSymbol, "SPX") >= 0 ||
-       StringFind(upperSymbol, "NAS") >= 0 || StringFind(upperSymbol, "FTSE") >= 0)
+    if(StringFind(sym, "DAX") >= 0 || StringFind(sym, "SPX") >= 0 || 
+       StringFind(sym, "DOW") >= 0 || StringFind(sym, "NASDAQ") >= 0 ||
+       StringFind(sym, "40") >= 0 || StringFind(sym, "500") >= 0)
+    {
         return ASSET_INDICES;
+    }
     
-    // Crypto patterns
-    if(StringFind(upperSymbol, "BTC") >= 0 || StringFind(upperSymbol, "ETH") >= 0 ||
-       StringFind(upperSymbol, "CRYPTO") >= 0)
-        return ASSET_CRYPTO;
-    
-    // Commodity patterns  
-    if(StringFind(upperSymbol, "GOLD") >= 0 || StringFind(upperSymbol, "SILVER") >= 0 ||
-       StringFind(upperSymbol, "OIL") >= 0 || StringFind(upperSymbol, "XAU") >= 0)
+    // Commodities patterns
+    if(StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0 ||
+       StringFind(sym, "XAG") >= 0 || StringFind(sym, "SILVER") >= 0 ||
+       StringFind(sym, "OIL") >= 0 || StringFind(sym, "CRUDE") >= 0)
+    {
         return ASSET_COMMODITY;
+    }
     
     return ASSET_UNKNOWN;
 }
 
-double MarginCalculator::CalculateForexMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
+//+------------------------------------------------------------------+
+//| Normalizza volume secondo vincoli simbolo                     |
+//+------------------------------------------------------------------+
+double MarginCalculator::NormalizeVolume(const string symbol, double volume)
 {
-    // Formula base Forex: (Lots * ContractSize * Price) / Leverage
-    double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-    double price = GetCurrentPrice(symbol, orderType);
-    double leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
+    if(volume <= 0) return 0;
     
-    if(contractSize <= 0 || price <= 0 || leverage <= 0) return -1;
+    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+    double stepVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
     
-    return (lots * contractSize * price) / leverage;
-}
-
-double MarginCalculator::CalculateIndexMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
-{
-    // Formula indici: simile a Forex ma con contract size specifico
-    return CalculateForexMargin(symbol, lots, orderType);
-}
-
-double MarginCalculator::CalculateCryptoMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
-{
-    // Formula crypto: può variare per broker
-    return CalculateForexMargin(symbol, lots, orderType);
-}
-
-double MarginCalculator::CalculateCommodityMargin(const string symbol, double lots, ENUM_ORDER_TYPE orderType)
-{
-    // Formula commodity: standard con margine specifico
-    return CalculateForexMargin(symbol, lots, orderType);
-}
-
-double MarginCalculator::GetSymbolContractSize(const string symbol)
-{
-    return SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-}
-
-double MarginCalculator::GetSymbolMarginRate(const string symbol)
-{
-    return SymbolInfoDouble(symbol, SYMBOL_MARGIN_INITIAL);
-}
-
-double MarginCalculator::GetCurrentPrice(const string symbol, ENUM_ORDER_TYPE orderType)
-{
-    MqlTick tick;
-    if(!SymbolInfoTick(symbol, tick)) return 0;
+    if(minVolume <= 0 || stepVolume <= 0) return 0;
     
-    return (orderType == ORDER_TYPE_BUY || orderType == ORDER_TYPE_BUY_STOP || orderType == ORDER_TYPE_BUY_LIMIT) ? 
-           tick.ask : tick.bid;
+    // Applica limite minimo
+    if(volume < minVolume) return 0;
+    
+    // Applica limite massimo
+    if(maxVolume > 0 && volume > maxVolume) volume = maxVolume;
+    
+    // Normalizza al passo più vicino
+    double normalizedVolume = MathRound(volume / stepVolume) * stepVolume;
+    
+    return normalizedVolume;
 }
 
-bool MarginCalculator::ValidateSymbol(const string symbol)
+//+------------------------------------------------------------------+
+//| Valida position size                                           |
+//+------------------------------------------------------------------+
+bool MarginCalculator::ValidatePositionSize(const string symbol, double lots)
 {
-    if(symbol == "")
+    double normalizedLots = NormalizeVolume(symbol, lots);
+    
+    if(normalizedLots != lots)
     {
-        SetError("Empty symbol");
+        SetError(StringFormat("Position size %.5f normalized to %.5f", lots, normalizedLots));
         return false;
     }
+    
+    return normalizedLots > 0;
+}
+
+//+------------------------------------------------------------------+
+//| Converti SL da pips a points                                  |
+//+------------------------------------------------------------------+
+double MarginCalculator::ConvertSLPipsToPoints(const string symbol, double slPips)
+{
+    return CalculateSlDistanceInPoints(symbol, slPips);
+}
+
+//+------------------------------------------------------------------+
+//| Aggiorna cache simbolo                                        |
+//+------------------------------------------------------------------+
+bool MarginCalculator::UpdateSymbolCache(const string symbol)
+{
+    datetime currentTime = TimeCurrent();
+    
+    // Usa cache se recente (meno di 1 minuto)
+    if(m_cachedSymbol == symbol && (currentTime - m_cacheTime) < 60)
+    {
+        return true;
+    }
+    
+    if(!IsValidSymbol(symbol))
+    {
+        SetError("Invalid symbol for cache update: " + symbol);
+        return false;
+    }
+    
+    double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+    double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+    
+    if(tickValue <= 0 || tickSize <= 0)
+    {
+        SetError("Invalid tick data for symbol: " + symbol);
+        return false;
+    }
+    
+    // Aggiorna cache
+    m_cachedSymbol = symbol;
+    m_cachedTickValue = tickValue;
+    m_cachedTickSize = tickSize;
+    m_cacheTime = currentTime;
+    
     return true;
 }
 
-bool MarginCalculator::ValidateLots(double lots)
+//+------------------------------------------------------------------+
+//| Calcola distanza SL in points                                 |
+//+------------------------------------------------------------------+
+double MarginCalculator::CalculateSlDistanceInPoints(const string symbol, double slPips)
 {
-    if(lots <= 0)
-    {
-        SetError("Invalid lot size");
-        return false;
-    }
-    return true;
+    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    
+    // Per simboli 5-digit/3-digit: 1 pip = 10 points
+    // Per simboli 4-digit/2-digit: 1 pip = 1 point
+    double pointsPerPip = (digits == 5 || digits == 3) ? 10.0 : 1.0;
+    
+    return slPips * pointsPerPip;
 }
 
-bool MarginCalculator::ValidateOrderType(ENUM_ORDER_TYPE orderType)
+//+------------------------------------------------------------------+
+//| Ottiene dimensione account                                     |
+//+------------------------------------------------------------------+
+double MarginCalculator::GetAccountSize()
 {
-    return true; // Per ora accetta tutti i tipi
+    // Usa equity per calcoli più precisi
+    return AccountInfoDouble(ACCOUNT_EQUITY);
 }
 
+//+------------------------------------------------------------------+
+//| Valida simbolo                                                 |
+//+------------------------------------------------------------------+
+bool MarginCalculator::IsValidSymbol(const string symbol)
+{
+    if(symbol == "") return false;
+    
+    // Verifica che il simbolo esista nel Market Watch
+    return SymbolInfoInteger(symbol, SYMBOL_SELECT);
+}
+
+//+------------------------------------------------------------------+
+//| Imposta errore                                                 |
+//+------------------------------------------------------------------+
 void MarginCalculator::SetError(const string error)
 {
     m_lastError = error;
     Print("MarginCalculator ERROR: ", error);
-}
-
-bool MarginCalculator::IsCacheValid(const string symbol)
-{
-    return (symbol == m_cachedSymbol && TimeCurrent() - m_cacheTime < 60); // Cache per 1 minuto
-}
-
-void MarginCalculator::UpdateCache(const string symbol, const AssetInfo& info)
-{
-    m_cachedSymbol = symbol;
-    m_cachedAssetInfo = info;
-    m_cacheTime = TimeCurrent();
-}
-
-void MarginCalculator::ClearCache()
-{
-    m_cachedSymbol = "";
-    m_cacheTime = 0;
 }
 
 #endif // MARGIN_CALCULATOR_MQH

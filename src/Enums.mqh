@@ -83,7 +83,7 @@ struct TPLevel
 };
 
 //+------------------------------------------------------------------+
-//| ✅ NUOVO: Asset Information (spostata qui per condivisione)    |
+//| ✅ UNIFICATA: Asset Information                                 |
 //+------------------------------------------------------------------+
 struct AssetInfo
 {
@@ -95,7 +95,7 @@ struct AssetInfo
     string baseQuoteCurrency;   // Valuta base/quote
     int digits;                 // Decimali prezzo
     
-    // ✅ CAMPI AGGIUNTIVI per AssetDetector
+    // Campi AssetDetector
     string baseSymbol;          // Simbolo base (es. EUR)
     string quoteSymbol;         // Simbolo quote (es. USD)  
     double pointValue;          // Point value in USD
@@ -103,6 +103,88 @@ struct AssetInfo
     AssetInfo() : type(ASSET_UNKNOWN), contractSize(0), tickSize(0), 
                   tickValue(0), marginRate(0), baseQuoteCurrency(""), digits(0),
                   baseSymbol(""), quoteSymbol(""), pointValue(0) {}
+};
+
+//+------------------------------------------------------------------+
+//| ✅ UNIFICATA: Position Size Information                         |
+//+------------------------------------------------------------------+
+struct PositionSizeInfo
+{
+    // Core fields
+    double totalLots;           // Lotti totali da aprire
+    double riskAmount;          // USD di rischio
+    double stopLossPoints;      // Punti di Stop Loss
+    double pointValue;          // Valore monetario per punto
+    bool isValid;               // Se il calcolo è valido
+    string errorReason;         // Motivo errore se any
+    
+    // MarginCalculator compatibility fields
+    double calculatedLots;      // Alias per totalLots
+    double slDistance;          // Alias per stopLossPoints
+    double tickValue;           // Tick value per lotto
+    double tickSize;            // Dimensione tick
+    string lastError;           // Alias per errorReason
+    
+    PositionSizeInfo() : totalLots(0), riskAmount(0), stopLossPoints(0), 
+                        pointValue(0), isValid(false), errorReason(""),
+                        calculatedLots(0), slDistance(0), tickValue(0), 
+                        tickSize(0), lastError("") {}
+                        
+    // Sync methods for compatibility
+    void SyncFields() {
+        calculatedLots = totalLots;
+        slDistance = stopLossPoints;
+        lastError = errorReason;
+    }
+};
+
+//+------------------------------------------------------------------+
+//| ✅ AGGIUNTA: Margin Information                                 |
+//+------------------------------------------------------------------+
+struct MarginInfo
+{
+    double requiredMargin;        // Margine richiesto per posizione
+    double availableMargin;       // Margine disponibile
+    double futureUsedMargin;      // Margine usato dopo apertura
+    double marginUtilization;     // % utilizzo margine
+    bool   canOpenPosition;       // Se posizione può essere aperta
+    string lastError;            // Ultimo errore
+    
+    MarginInfo() : requiredMargin(0), availableMargin(0), futureUsedMargin(0), 
+                   marginUtilization(0), canOpenPosition(false), lastError("") {}
+};
+
+//+------------------------------------------------------------------+
+//| ✅ AGGIUNTA: Multi-Target Information                           |
+//+------------------------------------------------------------------+
+struct MultiTargetInfo
+{
+    double tp1Lots;             // Lotti per TP1
+    double tp2Lots;             // Lotti per TP2
+    double tp3Lots;             // Lotti per TP3 (opzionale)
+    double tp1Price;            // Prezzo TP1
+    double tp2Price;            // Prezzo TP2  
+    double tp3Price;            // Prezzo TP3 (opzionale)
+    double remainingLots;       // Lotti rimanenti dopo TP
+    
+    MultiTargetInfo() : tp1Lots(0), tp2Lots(0), tp3Lots(0),
+                       tp1Price(0), tp2Price(0), tp3Price(0), remainingLots(0) {}
+};
+
+//+------------------------------------------------------------------+
+//| ✅ AGGIUNTA: Risk Parameters                                    |
+//+------------------------------------------------------------------+
+struct RiskParameters
+{
+    double riskPercentage;      // % capitale da rischiare
+    double tp1RiskReward;       // TP1 Risk/Reward ratio
+    double tp2RiskReward;       // TP2 Risk/Reward ratio
+    double tp1VolumePercent;    // % volume da chiudere al TP1
+    double tp2VolumePercent;    // % volume da chiudere al TP2
+    bool breakEvenAfterTP1;     // Breakeven dopo TP1
+    
+    RiskParameters() : riskPercentage(0.5), tp1RiskReward(1.8), tp2RiskReward(3.0),
+                      tp1VolumePercent(50.0), tp2VolumePercent(50.0), breakEvenAfterTP1(true) {}
 };
 
 //+------------------------------------------------------------------+

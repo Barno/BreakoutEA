@@ -1,6 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                                 RiskManager.mqh |
 //|                                     Position Sizing & Risk Control |
+//|                              HYBRID APPROACH - DEPENDENCY INJECTION |
 //|                                              SOLID Architecture  |
 //+------------------------------------------------------------------+
 
@@ -12,47 +13,9 @@
 #include "AssetDetector.mqh"
 
 //+------------------------------------------------------------------+
-//| Strutture per Risk Management                                   |
+//| ✅ RIMOSSO: Strutture duplicate (ora solo in Enums.mqh)        |
 //+------------------------------------------------------------------+
-struct PositionSizeInfo
-{
-    double totalLots;           // Lotti totali da aprire
-    double riskAmount;          // USD di rischio
-    double stopLossPoints;      // Punti di Stop Loss
-    double pointValue;          // Valore monetario per punto
-    bool isValid;               // Se il calcolo è valido
-    string errorReason;         // Motivo errore se any
-    
-    PositionSizeInfo() : totalLots(0), riskAmount(0), stopLossPoints(0), 
-                        pointValue(0), isValid(false), errorReason("") {}
-};
-
-struct MultiTargetInfo
-{
-    double tp1Lots;             // Lotti per TP1
-    double tp2Lots;             // Lotti per TP2
-    double tp3Lots;             // Lotti per TP3 (opzionale)
-    double tp1Price;            // Prezzo TP1
-    double tp2Price;            // Prezzo TP2  
-    double tp3Price;            // Prezzo TP3 (opzionale)
-    double remainingLots;       // Lotti rimanenti dopo TP
-    
-    MultiTargetInfo() : tp1Lots(0), tp2Lots(0), tp3Lots(0),
-                       tp1Price(0), tp2Price(0), tp3Price(0), remainingLots(0) {}
-};
-
-struct RiskParameters
-{
-    double riskPercentage;      // % capitale da rischiare
-    double tp1RiskReward;       // TP1 Risk/Reward ratio
-    double tp2RiskReward;       // TP2 Risk/Reward ratio
-    double tp1VolumePercent;    // % volume da chiudere al TP1
-    double tp2VolumePercent;    // % volume da chiudere al TP2
-    bool breakEvenAfterTP1;     // Breakeven dopo TP1
-    
-    RiskParameters() : riskPercentage(0.5), tp1RiskReward(1.8), tp2RiskReward(3.0),
-                      tp1VolumePercent(50.0), tp2VolumePercent(50.0), breakEvenAfterTP1(true) {}
-};
+// PositionSizeInfo, MultiTargetInfo, RiskParameters ora in Enums.mqh
 
 //+------------------------------------------------------------------+
 //| Interface per Risk Manager (SOLID - Dependency Inversion)      |
@@ -67,14 +30,14 @@ public:
 };
 
 //+------------------------------------------------------------------+
-//| RiskManager Class - Main Implementation                        |
+//| RiskManager Class - HYBRID APPROACH Implementation             |
 //+------------------------------------------------------------------+
 class RiskManager : public IRiskManager
 {
 private:
     string m_lastError;                    // Ultimo errore
     MarginCalculator* m_marginCalc;        // Riferimento a MarginCalculator
-    AssetDetector* m_assetDetector;  // ✅ Dependency Injection
+    AssetDetector* m_assetDetector;        // ✅ HYBRID: Dependency Injection
 
     double m_accountBalance;               // Balance account
     string m_accountCurrency;              // Valuta account
@@ -84,20 +47,16 @@ private:
     double m_maxMarginUtilization;         // Max utilizzo margine %
     bool m_useEquityForRisk;               // Usa equity invece di balance
     
-    
 public:
     RiskManager();
     ~RiskManager();
     
-    // Initialization
-    // ✅ OVERLOAD METHODS per backward compatibility
+    // ✅ HYBRID: Initialization Methods
     bool Initialize(MarginCalculator* marginCalculator);
     bool Initialize(MarginCalculator* marginCalculator, AssetDetector* assetDetector);
-
     
     // Main Interface Implementation (IRiskManager)    
     virtual double CalculateLotsForRisk(const string symbol, double riskPercent, double stopLossPoints) override;
-
     virtual PositionSizeInfo CalculatePositionSize(const string symbol, double entryPrice, double stopLoss, double riskPercent) override;
     virtual MultiTargetInfo CalculateMultiTargets(const string symbol, double entryPrice, double stopLoss, const RiskParameters& params) override;
     virtual bool ValidatePositionRisk(const string symbol, double lots, double stopLossPoints) override;
@@ -135,9 +94,13 @@ public:
 private:
     // Core Calculation Methods
     double CalculateStopLossPoints(double entryPrice, double stopLoss, const string symbol);
-
-    // GetAssetType con fallback
+    
+    // ✅ HYBRID: Asset Type Detection with Fallback Chain
     AssetType GetAssetType(const string symbol);
+    AssetType DetectAssetTypeSimple(const string symbol);
+    
+    // ✅ HYBRID: Point Value with Fallback Chain
+    double GetPointValueInternal(const string symbol);
     
     // Validation & Error Handling
     bool ValidateInputs(const string symbol, double riskPercent, double stopLossPoints);
@@ -148,9 +111,6 @@ private:
     // Utility Methods
     double RoundToLotStep(const string symbol, double lots);
     double ApplySafetyMargin(double calculatedLots, const string symbol);
-
-    // GetPointValue con fallback  
-    double GetPointValueInternal(const string symbol);
 };
 
 //+------------------------------------------------------------------+
@@ -158,6 +118,7 @@ private:
 //+------------------------------------------------------------------+
 RiskManager::RiskManager() : m_lastError(""),
                             m_marginCalc(NULL),
+                            m_assetDetector(NULL),
                             m_accountBalance(0),
                             m_accountCurrency(""),
                             m_maxRiskPerTrade(2.0),
@@ -172,15 +133,13 @@ RiskManager::RiskManager() : m_lastError(""),
 //+------------------------------------------------------------------+
 RiskManager::~RiskManager()
 {
-    // Non eliminiamo m_marginCalc perché non è di nostra proprietà
+    // Non eliminiamo m_marginCalc e m_assetDetector perché non sono di nostra proprietà
     m_marginCalc = NULL;
+    m_assetDetector = NULL;
 }
 
 //+------------------------------------------------------------------+
-//| Inizializza RiskManager                                         |
-//+------------------------------------------------------------------+
-//+------------------------------------------------------------------+
-//| ✅ Initialize BACKWARD COMPATIBLE (senza AssetDetector)        |
+//| ✅ HYBRID: Initialize BACKWARD COMPATIBLE (senza AssetDetector)|
 //+------------------------------------------------------------------+
 bool RiskManager::Initialize(MarginCalculator* marginCalculator)
 {
@@ -205,18 +164,18 @@ bool RiskManager::Initialize(MarginCalculator* marginCalculator)
     
     Print("RiskManager: Initialized successfully (backward compatible mode)");
     Print("Account Balance: ", DoubleToString(m_accountBalance, 2), " ", m_accountCurrency);
-    Print("Max Risk Per Trade: ", m_maxRiskPerTrade, "%");
-    Print("Max Margin Utilization: ", m_maxMarginUtilization, "%");
+    Print("Max Risk Per Trade: ", DoubleToString(m_maxRiskPerTrade, 1), "%");
+    Print("Max Margin Utilization: ", DoubleToString(m_maxMarginUtilization, 1), "%");
     
     return true;
 }
 
 //+------------------------------------------------------------------+
-//| ✅ Initialize CON AssetDetector (nuovo)                        |
+//| ✅ HYBRID: Initialize CON AssetDetector (enhanced mode)        |
 //+------------------------------------------------------------------+
 bool RiskManager::Initialize(MarginCalculator* marginCalculator, AssetDetector* assetDetector)
 {
-    Print("RiskManager: Initializing with MarginCalculator + AssetDetector...");
+    Print("RiskManager: Initializing with MarginCalculator + AssetDetector (enhanced mode)...");
     
     if(marginCalculator == NULL)
     {
@@ -245,10 +204,10 @@ bool RiskManager::Initialize(MarginCalculator* marginCalculator, AssetDetector* 
         return false;
     }
     
-    Print("RiskManager: Initialized successfully");
+    Print("RiskManager: Initialized successfully (enhanced mode)");
     Print("Account Balance: ", DoubleToString(m_accountBalance, 2), " ", m_accountCurrency);
-    Print("Max Risk Per Trade: ", m_maxRiskPerTrade, "%");
-    Print("Max Margin Utilization: ", m_maxMarginUtilization, "%");
+    Print("Max Risk Per Trade: ", DoubleToString(m_maxRiskPerTrade, 1), "%");
+    Print("Max Margin Utilization: ", DoubleToString(m_maxMarginUtilization, 1), "%");
     
     return true;
 }
@@ -272,7 +231,7 @@ double RiskManager::CalculateLotsForRisk(const string symbol, double riskPercent
         return 0;
     }
     
-    // Ottieni point value per il simbolo
+    // ✅ HYBRID: Ottieni point value con fallback chain
     double pointValue = GetPointValue(symbol);
     if(pointValue <= 0)
     {
@@ -438,26 +397,33 @@ double RiskManager::CalculateRiskAmount(double riskPercent)
 }
 
 //+------------------------------------------------------------------+
-//| Ottiene point value per simbolo (MULTI-ASSET)                  |
+//| ✅ HYBRID: Point Value con Fallback Chain                      |
 //+------------------------------------------------------------------+
 double RiskManager::GetPointValue(const string symbol)
 {
-    // ✅ PREFERENZA: Usa AssetDetector se disponibile
+    // 🥇 PREFERENZA: Usa AssetDetector se disponibile
     if(m_assetDetector != NULL)
     {
         double pointValue = m_assetDetector.GetPointValue(symbol);
         if(pointValue > 0)
         {
+            Print("RiskManager: Using AssetDetector point value for ", symbol, ": ", DoubleToString(pointValue, 4));
             return pointValue;
+        }
+        else
+        {
+            Print("RiskManager: AssetDetector failed for ", symbol, ", falling back to MarginCalculator");
         }
     }
     
-    // ✅ FALLBACK: Usa logica esistente
-    return GetPointValueInternal(symbol);
+    // 🥈 FALLBACK: Usa logica interna esistente
+    double fallbackValue = GetPointValueInternal(symbol);
+    Print("RiskManager: Using internal point value for ", symbol, ": ", DoubleToString(fallbackValue, 4));
+    return fallbackValue;
 }
 
 //+------------------------------------------------------------------+
-//| ✅ RINOMINATO: Logica esistente come fallback                  |
+//| Point Value Internal (logica esistente come fallback)          |
 //+------------------------------------------------------------------+
 double RiskManager::GetPointValueInternal(const string symbol)
 {
@@ -474,9 +440,84 @@ double RiskManager::GetPointValueInternal(const string symbol)
         case ASSET_COMMODITY:
             return CalculateCommodityPointValue(symbol);
         default:
-            // Fallback: usa tick value di MT5
+            // 🥉 ULTIMO FALLBACK: usa tick value di MT5
             return SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
     }
+}
+
+//+------------------------------------------------------------------+
+//| ✅ HYBRID: Asset Type Detection con Fallback Chain             |
+//+------------------------------------------------------------------+
+AssetType RiskManager::GetAssetType(const string symbol)
+{
+    // 🥇 PREFERENZA: Usa AssetDetector se disponibile
+    if(m_assetDetector != NULL)
+    {
+        AssetType type = m_assetDetector.GetAssetType(symbol);
+        if(type != ASSET_UNKNOWN)
+        {
+            return type;
+        }
+    }
+    
+    // 🥈 FALLBACK: Usa MarginCalculator se disponibile
+    if(m_marginCalc != NULL)
+    {
+        AssetType type = m_marginCalc.DetectAssetType(symbol);  // ✅ CORRETTO
+        if(type != ASSET_UNKNOWN)
+        {
+            return type;
+        }
+    }
+    
+    // 🥉 ULTIMO FALLBACK: Detection semplice integrata
+    return DetectAssetTypeSimple(symbol);
+}
+
+//+------------------------------------------------------------------+
+//| ✅ FIXED: Detection Semplice con Conversione Corretta          |
+//+------------------------------------------------------------------+
+AssetType RiskManager::DetectAssetTypeSimple(const string symbol)
+{
+    string sym = symbol; // ✅ FIX: Non usare StringToUpper sulla reference
+    StringToUpper(sym);  // ✅ FIX: Modifica la copia
+    
+    // Forex patterns
+    if(StringLen(sym) == 6 || StringLen(sym) == 7)
+    {
+        if(StringFind(sym, "USD") >= 0 || StringFind(sym, "EUR") >= 0 || 
+           StringFind(sym, "GBP") >= 0 || StringFind(sym, "JPY") >= 0 ||
+           StringFind(sym, "CHF") >= 0 || StringFind(sym, "CAD") >= 0 ||
+           StringFind(sym, "AUD") >= 0 || StringFind(sym, "NZD") >= 0)
+        {
+            return ASSET_FOREX;
+        }
+    }
+    
+    // Indices patterns  
+    if(StringFind(sym, "DAX") >= 0 || StringFind(sym, "SPX") >= 0 || 
+       StringFind(sym, "40") >= 0 || StringFind(sym, "500") >= 0 ||
+       StringFind(sym, "DOW") >= 0 || StringFind(sym, "NASDAQ") >= 0)
+    {
+        return ASSET_INDICES;
+    }
+    
+    // Crypto patterns
+    if(StringFind(sym, "BTC") >= 0 || StringFind(sym, "ETH") >= 0 ||
+       StringFind(sym, "CRYPTO") >= 0 || StringFind(sym, "COIN") >= 0)
+    {
+        return ASSET_CRYPTO;
+    }
+    
+    // Commodity patterns
+    if(StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0 || 
+       StringFind(sym, "XAG") >= 0 || StringFind(sym, "SILVER") >= 0 ||
+       StringFind(sym, "OIL") >= 0 || StringFind(sym, "CRUDE") >= 0)
+    {
+        return ASSET_COMMODITY;
+    }
+    
+    return ASSET_UNKNOWN;
 }
 
 //+------------------------------------------------------------------+
@@ -589,24 +630,6 @@ double RiskManager::RoundToLotStep(const string symbol, double lots)
 double RiskManager::CalculateStopLossPoints(double entryPrice, double stopLoss, const string symbol)
 {
     return MathAbs(entryPrice - stopLoss) / SymbolInfoDouble(symbol, SYMBOL_POINT);
-}
-
-AssetType RiskManager::GetAssetType(const string symbol)
-{
-    // ✅ PREFERENZA: Usa AssetDetector se disponibile
-    if(m_assetDetector != NULL)
-    {
-        return m_assetDetector.GetAssetType(symbol);
-    }
-    
-    // ✅ FALLBACK: Usa MarginCalculator come prima
-    if(m_marginCalc != NULL)
-    {
-        AssetInfo info = m_marginCalc.GetAssetInfo(symbol);
-        return info.type;
-    }
-    
-    return ASSET_UNKNOWN;
 }
 
 bool RiskManager::ValidateInputs(const string symbol, double riskPercent, double stopLossPoints)
