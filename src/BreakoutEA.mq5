@@ -1,15 +1,15 @@
 //+------------------------------------------------------------------+
 //|                                               BEN Strategy.mq5    |
 //|                                  Strategia Breakout Bidirezionale |
-//|                                  Minimal Working Version         |
+//|                                  TRADING VERSION - FIRST TRADE   |
 //+------------------------------------------------------------------+
 #property copyright "Ben Team"
-#property version   "1.14"
-#property description "Strategia Breakout Bidirezionale - Minimal Working"
+#property version   "1.20"
+#property description "Strategia Breakout Bidirezionale - TRADING ENABLED"
 #property strict
 
 //+------------------------------------------------------------------+
-//| Include Headers (SOLO QUELLI CHE COMPILANO)                    |
+//| Include Headers                                                  |
 //+------------------------------------------------------------------+
 #include "Enums.mqh"
 #include "ConfigManager.mqh"
@@ -18,9 +18,8 @@
 #include "MarginCalculator.mqh"      
 #include "AssetDetector.mqh"         
 #include "RiskManager.mqh"           
-// ❌ TEMPORANEAMENTE DISABILITATI per far compilare:
-// #include "CandleAnalyzer.mqh"        
-// #include "OrderManager.mqh"           
+#include "CandleAnalyzer.mqh"        // ✅ NOW ENABLED
+#include "OrderManager.mqh"          // ✅ NOW ENABLED
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
@@ -79,13 +78,18 @@ input bool LogSessionAlerts = true;
 input bool LogCandleOHLC = true;                
 input bool LogSystemHealth = true;              
 
-input group "=== TRADE REALI ==="
-input bool AbilitaTradeReali = false;           // ❌ DISABILITATO per ora
+input group "=== 🚀 TRADE REALI ==="
+input bool AbilitaTradeReali = true;            // ✅ ENABLED for first trade!
 input int MaxSecondiRitardoApertura = 10;       
-input int MaxTentativiOrdine = 3;               
+input int MaxTentativiOrdine = 3;       
+
+input group "=== ⏰ TIMING SESSIONI ==="
+input int SessionToleranceMinutes = 5;          // Minuti di tolleranza per aprire ordini
+input int MaxSecondiRitardoApertura = 10;       // Max secondi ritardo piazzamento ordine
+input int MaxTentativiOrdine = 3;               // Max tentativi per piazzare ordine
 
 //+------------------------------------------------------------------+
-//| Global Variables (SOLO QUELLI CHE COMPILANO)                   |
+//| Global Variables - ALL ENABLED                                  |
 //+------------------------------------------------------------------+
 ConfigManager* g_configManager = NULL;
 ChartVisualizer* g_chartVisualizer = NULL;
@@ -93,94 +97,68 @@ TelegramLogger* g_telegramLogger = NULL;
 MarginCalculator* g_marginCalc = NULL;          
 AssetDetector* g_assetDetector = NULL;          
 RiskManager* g_riskManager = NULL;              
-// ❌ TEMPORANEAMENTE DISABILITATI:
-// CandleAnalyzer* g_candleAnalyzer = NULL;        
-// OrderManager* g_orderManager = NULL;            
+CandleAnalyzer* g_candleAnalyzer = NULL;        // ✅ NOW ENABLED
+OrderManager* g_orderManager = NULL;            // ✅ NOW ENABLED
 
 bool g_isInitialized = false;
 datetime g_lastVisualizationUpdate = 0;
 datetime g_lastCleanupCheck = 0;
 datetime g_lastServerTimeCheck = 0;
 
+// ✅ TRADING STATE TRACKING
+datetime g_lastSessionCheck = 0;
+bool g_session1TradeToday = false;
+bool g_session2TradeToday = false;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("🚀 BenStrategy v1.14 - Minimal Working Version");
+   Print("🚀 BenStrategy v1.20 - TRADING VERSION");
    Print("Symbol: ", Symbol(), " | Timeframe: ", EnumToString(Period()));
-   Print("⚠️  CandleAnalyzer & OrderManager temporaneamente disabilitati");
+   Print("⚡ CandleAnalyzer & OrderManager ENABLED");
+   Print("🔥 TRADE REALI: ", AbilitaTradeReali ? "ENABLED" : "DISABLED");
    
    g_isInitialized = false;
    
    // Log configurazione sessioni
    LogSessionConfiguration();
    
-   // Inizializza ConfigManager
-   if(!InitializeConfigManager())
+   // Inizializza tutti i componenti
+   if(!InitializeAllComponents())
    {
-      Print("ERROR: ConfigManager initialization failed");
-      return(INIT_FAILED);
-   }
-   
-   // Inizializza ChartVisualizer
-   if(!InitializeChartVisualizer())
-   {
-      Print("ERROR: ChartVisualizer initialization failed");
-      return(INIT_FAILED);
-   }
-
-   // Inizializza MarginCalculator
-   if(!InitializeMarginCalculator())
-   {
-      Print("ERROR: MarginCalculator initialization failed");
-      return(INIT_FAILED);
-   }
-
-   // Inizializza AssetDetector
-   if(!InitializeAssetDetector())
-   {
-      Print("ERROR: AssetDetector initialization failed");
-      return(INIT_FAILED);
-   }
-
-   // Inizializza RiskManager
-   if(!InitializeRiskManagerWithAssetDetector())
-   {
-      Print("ERROR: RiskManager initialization failed");
+      Print("ERROR: Component initialization failed");
       return(INIT_FAILED);
    }
    
    // Disegna righe di riferimento iniziali
    DrawInitialReferenceLines();
    
-   // Inizializza TelegramLogger
-   if(!InitializeTelegramLogger())
-   {
-      Print("ERROR: TelegramLogger initialization failed");
-      return(INIT_FAILED);
-   }
-   
    // Invia messaggio di avvio sistema
    SendSystemStartupMessage();
    
    // Setup timer per cleanup periodico
-   EventSetTimer(3600); // Timer ogni ora
+   EventSetTimer(60); // Timer ogni minuto per controlli frequenti
    
    g_isInitialized = true;
    g_lastVisualizationUpdate = TimeCurrent();
    g_lastCleanupCheck = TimeCurrent();
    g_lastServerTimeCheck = TimeCurrent();
+   g_lastSessionCheck = 0;
    
-   Print("✅ BreakoutEA initialized successfully (MINIMAL MODE)");
+   Print("✅ BreakoutEA initialized successfully - READY FOR TRADING!");
 
-   // Solo broker & symbol info
+   // Log broker & symbol info
    LogBrokerAndSymbolInfo();
+   
+   // Test calcoli per debug
+   TestTradingCalculations();
 
    if(g_telegramLogger.IsEnabled())
    {
       string serverTime = TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES);
-      g_telegramLogger.SendTelegramMessage("EA started successfully - MINIMAL MODE - Server time: " + serverTime);
+      g_telegramLogger.SendTelegramMessage("🔥 EA TRADING VERSION started - " + serverTime + " - Trades: " + (AbilitaTradeReali ? "ON" : "OFF"));
    }
    
    return(INIT_SUCCEEDED);
@@ -197,6 +175,18 @@ void OnDeinit(const int reason)
    EventKillTimer();
    
    // Cleanup in reverse order
+   if(g_orderManager != NULL)
+   {
+      delete g_orderManager;
+      g_orderManager = NULL;
+   }
+   
+   if(g_candleAnalyzer != NULL)
+   {
+      delete g_candleAnalyzer;
+      g_candleAnalyzer = NULL;
+   }
+   
    if(g_riskManager != NULL)
    {
       delete g_riskManager;
@@ -244,30 +234,243 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                            |
+//| 🚀 Expert tick function - TRADING LOGIC                        |
 //+------------------------------------------------------------------+
 void OnTick()
 {
    if(!g_isInitialized) return;
    
-   // Aggiorna visualizzazione se necessario
    datetime currentTime = TimeCurrent();
+   
+   // Aggiorna visualizzazione se necessario
    if(ShouldUpdateVisualization(currentTime))
    {
       UpdateReferenceLines();
       g_lastVisualizationUpdate = currentTime;
+      
+      // Reset trading flags per nuovo giorno
+      ResetDailyTradingFlags();
    }
    
-   // ⚠️ TODO: Aggiungere CandleAnalyzer e OrderManager quando compilano
+   // 🔥 MAIN TRADING LOGIC
+   if(AbilitaTradeReali)
+   {
+      CheckSessionTradingOpportunities(currentTime);
+   }
+   
+   // Log periodico per debug
    static int tickCount = 0;
    tickCount++;
    
-   if(tickCount % 5000 == 0)
+   if(tickCount % 10000 == 0)
    {
-      Print("💡 Minimal Mode - Waiting for CandleAnalyzer & OrderManager integration");
+      Print("🔥 TRADING MODE - Tick: ", tickCount);
       Print("   Current time: ", TimeToString(currentTime, TIME_DATE | TIME_MINUTES));
-      Print("   Next session 1: ", CalculateNextSessionTime(1));
-      Print("   Next session 2: ", CalculateNextSessionTime(2));
+      Print("   Session1 traded today: ", g_session1TradeToday ? "YES" : "NO");
+      Print("   Session2 traded today: ", g_session2TradeToday ? "YES" : "NO");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| 🚀 MAIN TRADING LOGIC - Session Check                          |
+//+------------------------------------------------------------------+
+void CheckSessionTradingOpportunities(datetime currentTime)
+{
+   // Controllo ogni minuto
+   if(currentTime - g_lastSessionCheck < 60) return;
+   g_lastSessionCheck = currentTime;
+   
+   MqlDateTime dt;
+   TimeToStruct(currentTime, dt);
+   
+   // Calcola orari sessioni effettivi (con DST)
+   int session1HourActual = (Session1_Hour + (IsSummerTime ? 1 : 0)) % 24;
+   int session2HourActual = (Session2_Hour + (IsSummerTime ? 1 : 0)) % 24;
+   
+   // ✅ USA IL PARAMETRO invece di hardcode "5"
+   // Controlla Session 1
+   if(!g_session1TradeToday && 
+      dt.hour == session1HourActual && 
+      dt.min >= Session1_Minute && 
+      dt.min <= Session1_Minute + SessionToleranceMinutes)  // ← PARAMETRIZZATO!
+   {
+      Print("🔔 SESSION 1 TRIGGER DETECTED! (Tolerance: ", SessionToleranceMinutes, " min)");
+      ExecuteSessionTrade(1, currentTime);
+   }
+   
+   // ✅ USA IL PARAMETRO anche per Session 2
+   // Controlla Session 2
+   if(!g_session2TradeToday && 
+      dt.hour == session2HourActual && 
+      dt.min >= Session2_Minute && 
+      dt.min <= Session2_Minute + SessionToleranceMinutes)  // ← PARAMETRIZZATO!
+   {
+      Print("🔔 SESSION 2 TRIGGER DETECTED! (Tolerance: ", SessionToleranceMinutes, " min)");
+      ExecuteSessionTrade(2, currentTime);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| 🚀 EXECUTE BREAKOUT TRADE                                      |
+//+------------------------------------------------------------------+
+void ExecuteSessionTrade(int sessionNumber, datetime currentTime)
+{
+   Print("=== EXECUTING SESSION ", sessionNumber, " TRADE ===");
+   
+   // 1. Get reference candle data
+   CandleData candleData;
+   if(!g_candleAnalyzer.GetReferenceCandleData(currentTime, candleData))
+   {
+      Print("❌ Failed to get reference candle data: ", g_candleAnalyzer.GetLastError());
+      return;
+   }
+   
+   // 2. Apply corpo filter if active
+   if(FiltroCorporeAttivo)
+   {
+      CandleFilters filters;
+      filters.corpoFilterActive = true;
+      filters.forexCorpoMinPips = ForexCorpoMinimoPips;
+      filters.indicesCorpoMinPoints = IndiciCorpoMinimoPunti;
+      filters.cryptoCorpoMinPoints = CryptoCorpoMinimoPunti;
+      filters.commodityCorpoMinPoints = CommodityCorpoMinimoPunti;
+      
+      if(!g_candleAnalyzer.PassesCorporeFilter(candleData, filters))
+      {
+         Print("❌ Candle failed corpo filter - skipping session");
+         MarkSessionTraded(sessionNumber);
+         return;
+      }
+   }
+   
+   // 3. Calculate entry levels
+   EntryLevels levels = g_candleAnalyzer.CalculateEntryLevels(candleData);
+   if(!g_candleAnalyzer.ValidateSetup(levels))
+   {
+      Print("❌ Setup validation failed: ", g_candleAnalyzer.GetLastError());
+      MarkSessionTraded(sessionNumber);
+      return;
+   }
+   
+   // 4. Calculate position sizing
+   double buyStopPoints = (levels.buyEntry - levels.buySL) / SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   double sellStopPoints = (levels.sellSL - levels.sellEntry) / SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   
+   double buyLots = g_riskManager.CalculateLotsForRisk(Symbol(), RischioPercentuale, buyStopPoints);
+   double sellLots = g_riskManager.CalculateLotsForRisk(Symbol(), RischioPercentuale, sellStopPoints);
+   
+   if(buyLots <= 0 || sellLots <= 0)
+   {
+      Print("❌ Position sizing failed: Buy=", buyLots, " Sell=", sellLots);
+      Print("❌ RiskManager error: ", g_riskManager.GetLastError());
+      MarkSessionTraded(sessionNumber);
+      return;
+   }
+   
+   // 5. Execute orders
+   string comment = "BreakoutEA_S" + IntegerToString(sessionNumber);
+   
+   ulong buyTicket = g_orderManager.CreateBuyStopOrder(Symbol(), buyLots, levels.buyEntry, levels.buySL, 0, comment);
+   ulong sellTicket = g_orderManager.CreateSellStopOrder(Symbol(), sellLots, levels.sellEntry, levels.sellSL, 0, comment);
+   
+   // 6. Validate order placement
+   bool ordersSuccess = (buyTicket > 0 && sellTicket > 0);
+   
+   if(ordersSuccess)
+   {
+      Print("🎯 BREAKOUT ORDERS PLACED SUCCESSFULLY!");
+      Print("  Buy Stop: #", buyTicket, " - ", buyLots, " lots @ ", DoubleToString(levels.buyEntry, _Digits));
+      Print("  Sell Stop: #", sellTicket, " - ", sellLots, " lots @ ", DoubleToString(levels.sellEntry, _Digits));
+      
+      // Send Telegram notification
+      if(g_telegramLogger != NULL && g_telegramLogger.IsEnabled())
+      {
+         string message = "🎯 BREAKOUT TRADE S" + IntegerToString(sessionNumber) + "\n";
+         message += "Symbol: " + Symbol() + "\n";
+         message += "Buy: " + DoubleToString(buyLots, 2) + " @ " + DoubleToString(levels.buyEntry, _Digits) + "\n";
+         message += "Sell: " + DoubleToString(sellLots, 2) + " @ " + DoubleToString(levels.sellEntry, _Digits) + "\n";
+         message += "Risk: " + DoubleToString(RischioPercentuale, 1) + "%";
+         
+         g_telegramLogger.SendTelegramMessage(message);
+      }
+   }
+   else
+   {
+      Print("❌ FAILED TO PLACE BREAKOUT ORDERS!");
+      Print("  Buy ticket: ", buyTicket, " (", buyTicket > 0 ? "OK" : "FAILED", ")");
+      Print("  Sell ticket: ", sellTicket, " (", sellTicket > 0 ? "OK" : "FAILED", ")");
+      Print("  OrderManager error: ", g_orderManager.GetLastError());
+      
+      // Cleanup partial orders if any
+      if(buyTicket > 0) g_orderManager.DeleteOrder(buyTicket);
+      if(sellTicket > 0) g_orderManager.DeleteOrder(sellTicket);
+   }
+   
+   // 7. Mark session as traded regardless of success/failure
+   MarkSessionTraded(sessionNumber);
+   
+   Print("=== SESSION ", sessionNumber, " EXECUTION COMPLETED ===");
+}
+
+//+------------------------------------------------------------------+
+//| Mark session as traded for today                               |
+//+------------------------------------------------------------------+
+void MarkSessionTraded(int sessionNumber)
+{
+   if(sessionNumber == 1)
+   {
+      g_session1TradeToday = true;
+      Print("✅ Session 1 marked as traded for today");
+   }
+   else if(sessionNumber == 2)
+   {
+      g_session2TradeToday = true;
+      Print("✅ Session 2 marked as traded for today");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Reset daily trading flags                                      |
+//+------------------------------------------------------------------+
+void ResetDailyTradingFlags()
+{
+   g_session1TradeToday = false;
+   g_session2TradeToday = false;
+   Print("🔄 Daily trading flags reset for new day");
+}
+
+//+------------------------------------------------------------------+
+//| Test trading calculations                                      |
+//+------------------------------------------------------------------+
+void TestTradingCalculations()
+{
+   Print("=== TESTING TRADING CALCULATIONS ===");
+   
+   // Test asset detection
+   if(g_assetDetector != NULL)
+   {
+      AssetInfo assetInfo = g_assetDetector.DetectAsset(Symbol());
+      Print("Asset Type: ", AssetTypeToString(assetInfo.type));
+      Print("Point Value: ", DoubleToString(assetInfo.pointValue, 4));
+   }
+   
+   // Test risk calculation
+   if(g_riskManager != NULL)
+   {
+      double testLots = g_riskManager.CalculateLotsForRisk(Symbol(), RischioPercentuale, 100.0);
+      Print("Test Position Size (100 points SL): ", DoubleToString(testLots, 3), " lots");
+      
+      double riskAmount = g_riskManager.CalculateRiskAmount(RischioPercentuale);
+      Print("Risk Amount: ", DoubleToString(riskAmount, 2), " ", g_riskManager.GetAccountCurrency());
+   }
+   
+   // Test margin
+   if(g_marginCalc != NULL)
+   {
+      MarginInfo marginInfo = g_marginCalc.GetMarginAnalysis(Symbol(), 0.1, ORDER_TYPE_BUY);
+      Print("Required Margin (0.1 lot): ", DoubleToString(marginInfo.requiredMargin, 2));
+      Print("Available Margin: ", DoubleToString(marginInfo.availableMargin, 2));
+      Print("Can Open Position: ", marginInfo.canOpenPosition ? "YES" : "NO");
    }
 }
 
@@ -295,37 +498,117 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
-//| ⚠️ PLACEHOLDER: Calcola prossima sessione                      |
+//| Initialize all components                                       |
 //+------------------------------------------------------------------+
-string CalculateNextSessionTime(int sessionNumber)
+bool InitializeAllComponents()
 {
-   datetime currentTime = TimeCurrent();
-   MqlDateTime dt;
-   TimeToStruct(currentTime, dt);
-   
-   int targetHour = (sessionNumber == 1) ? 
-                   (Session1_Hour + (IsSummerTime ? 1 : 0)) % 24 : 
-                   (Session2_Hour + (IsSummerTime ? 1 : 0)) % 24;
-   int targetMinute = (sessionNumber == 1) ? Session1_Minute : Session2_Minute;
-   
-   dt.hour = targetHour;
-   dt.min = targetMinute;
-   dt.sec = 0;
-   
-   datetime sessionTime = StructToTime(dt);
-   
-   // Se è già passata oggi, calcola per domani
-   if(sessionTime <= currentTime)
+   // ConfigManager
+   if(!InitializeConfigManager())
    {
-      sessionTime += 86400; // +1 giorno
+      Print("ERROR: ConfigManager initialization failed");
+      return false;
    }
    
-   return TimeToString(sessionTime, TIME_DATE | TIME_MINUTES);
+   // ChartVisualizer
+   if(!InitializeChartVisualizer())
+   {
+      Print("ERROR: ChartVisualizer initialization failed");
+      return false;
+   }
+
+   // MarginCalculator
+   if(!InitializeMarginCalculator())
+   {
+      Print("ERROR: MarginCalculator initialization failed");
+      return false;
+   }
+
+   // AssetDetector
+   if(!InitializeAssetDetector())
+   {
+      Print("ERROR: AssetDetector initialization failed");
+      return false;
+   }
+
+   // RiskManager
+   if(!InitializeRiskManager())
+   {
+      Print("ERROR: RiskManager initialization failed");
+      return false;
+   }
+   
+   // CandleAnalyzer ✅
+   if(!InitializeCandleAnalyzer())
+   {
+      Print("ERROR: CandleAnalyzer initialization failed");
+      return false;
+   }
+   
+   // OrderManager ✅
+   if(!InitializeOrderManager())
+   {
+      Print("ERROR: OrderManager initialization failed");
+      return false;
+   }
+   
+   // TelegramLogger
+   if(!InitializeTelegramLogger())
+   {
+      Print("ERROR: TelegramLogger initialization failed");
+      return false;
+   }
+   
+   Print("✅ All components initialized successfully");
+   return true;
 }
 
-// ============================================================================
-// EXISTING FUNCTIONS (mantenute invariate)
-// ============================================================================
+//+------------------------------------------------------------------+
+//| Initialize CandleAnalyzer                                      |
+//+------------------------------------------------------------------+
+bool InitializeCandleAnalyzer()
+{
+   g_candleAnalyzer = new CandleAnalyzer();
+   if(g_candleAnalyzer == NULL) 
+   {
+      Print("ERROR: Failed to create CandleAnalyzer");
+      return false;
+   }
+   
+   if(!g_candleAnalyzer.Initialize(Symbol(), TimeframeRiferimento, g_assetDetector, SpreadBufferPips))
+   {
+      Print("ERROR: CandleAnalyzer initialization failed - ", g_candleAnalyzer.GetLastError());
+      return false;
+   }
+   
+   Print("✅ CandleAnalyzer initialized successfully");
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Initialize OrderManager                                        |
+//+------------------------------------------------------------------+
+bool InitializeOrderManager()
+{
+   g_orderManager = new OrderManager();
+   if(g_orderManager == NULL) 
+   {
+      Print("ERROR: Failed to create OrderManager");
+      return false;
+   }
+   
+   long baseMagic = 234567; // Magic number base
+   if(!g_orderManager.Initialize(baseMagic, MaxTentativiOrdine, 100))
+   {
+      Print("ERROR: OrderManager initialization failed - ", g_orderManager.GetLastError());
+      return false;
+   }
+   
+   g_orderManager.SetMaxRetries(MaxTentativiOrdine);
+   g_orderManager.SetSlippage(10); // 10 points slippage
+   
+   Print("✅ OrderManager initialized successfully");
+   return true;
+}
 
 //+------------------------------------------------------------------+
 //| Inizializza MarginCalculator                                   |
@@ -367,7 +650,7 @@ bool InitializeAssetDetector()
 //+------------------------------------------------------------------+
 //| Inizializza RiskManager                                        |
 //+------------------------------------------------------------------+
-bool InitializeRiskManagerWithAssetDetector()
+bool InitializeRiskManager()
 {
    g_riskManager = new RiskManager();
    if(g_riskManager == NULL) 
@@ -477,7 +760,7 @@ void SendSystemStartupMessage()
    
    string details = "Symbol: " + Symbol() + " | Timeframe: " + EnumToString(Period()) + 
                    " | DST: " + (IsSummerTime ? "SUMMER (+1h)" : "WINTER (base)") +
-                   " | Mode: MINIMAL (CandleAnalyzer/OrderManager disabled)";
+                   " | TRADING: " + (AbilitaTradeReali ? "ENABLED 🔥" : "DISABLED");
    
    g_telegramLogger.SendSystemHealth("STARTUP", details);
 }

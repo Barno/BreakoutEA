@@ -1,476 +1,401 @@
 //+------------------------------------------------------------------+
-//|                                             ChartVisualizer.mqh |
-//|                                    Disegno Righe Verticali     |
+//|                                              CandleAnalyzer.mqh |
+//|                                    Analisi Candele di Riferimento |
 //|                                              Single Responsibility |
 //+------------------------------------------------------------------+
 
-#ifndef CHART_VISUALIZER_MQH
-#define CHART_VISUALIZER_MQH
+#ifndef CANDLE_ANALYZER_MQH
+#define CANDLE_ANALYZER_MQH
 
 #include "Enums.mqh"
-#include "TimeManager.mqh"
+#include "AssetDetector.mqh"
 
 //+------------------------------------------------------------------+
-//| ChartVisualizer Class                                           |
+//| CandleAnalyzer Class                                            |
 //+------------------------------------------------------------------+
-class ChartVisualizer
+class CandleAnalyzer
 {
 private:
-    string m_objectPrefix;          // Prefisso per oggetti grafici
-    color  m_lineColor;             // Colore linee verticali
-    int    m_lineWidth;             // Spessore linee
-    ENUM_LINE_STYLE m_lineStyle;   // Stile linee
-    datetime m_lastCleanupDate;     // Ultima data cleanup
+    string m_symbol;
+    ENUM_TIMEFRAMES m_timeframe;
+    double m_spreadBuffer;
+    double m_entryDistance;
+    double m_slDistance;
+    string m_lastError;
     
-    // Array per tracking oggetti creati
-    string m_createdObjects[];
-    int    m_objectCount;
-    
-    // TimeManager per calcoli temporali
-    TimeManager* m_timeManager;
+    AssetDetector* m_assetDetector;     // Reference per asset detection
 
 public:
-    ChartVisualizer();
-    ~ChartVisualizer();
+    CandleAnalyzer();
+    ~CandleAnalyzer();
     
     // Main interface
-    bool Initialize(color lineColor = clrRed, int lineWidth = 1, ENUM_LINE_STYLE lineStyle = STYLE_SOLID);
-    bool DrawReferenceCandle(datetime candleTime, string sessionName = "");
-    bool DrawSessionReferences(int session1Hour, int session1Min, int session2Hour, int session2Min, bool isSummerTime);
-    bool CleanupPreviousDayLines();
-    bool CleanupAllLines();
+    bool Initialize(const string symbol, ENUM_TIMEFRAMES timeframe, AssetDetector* assetDetector, double spreadBuffer = 2.0);
+    bool GetReferenceCandleData(datetime sessionTime, CandleData& candleData);
+    EntryLevels CalculateEntryLevels(const CandleData& candleData);
+    bool ValidateSetup(const EntryLevels& levels);
+    bool PassesCorporeFilter(const CandleData& candleData, const CandleFilters& filters);
     
-    // Configuration
-    void SetLineColor(color newColor) { m_lineColor = newColor; }
-    void SetLineWidth(int newWidth) { m_lineWidth = newWidth; }
-    void SetLineStyle(ENUM_LINE_STYLE newStyle) { m_lineStyle = newStyle; }
-    
-    // Info
-    int GetObjectCount() const { return m_objectCount; }
-    datetime GetLastCleanupDate() const { return m_lastCleanupDate; }
+    // Getters
+    string GetSymbol() const { return m_symbol; }
+    ENUM_TIMEFRAMES GetTimeframe() const { return m_timeframe; }
+    string GetLastError() const { return m_lastError; }
 
 private:
-    string GenerateObjectName(datetime candleTime, string sessionName);
-    bool CreateVerticalLine(string objectName, datetime time);
-    bool CreateTimeLabel(string labelName, datetime time);
-    bool DeleteObject(string objectName);
-    bool ShouldCleanupObject(string objectName, datetime currentDate);
-    void AddToObjectList(string objectName);
-    void RemoveFromObjectList(string objectName);
-    datetime GetDateOnly(datetime fullDateTime);
+    bool FindReferenceCandleIndex(datetime sessionTime, int& candleIndex);
+    double GetPoint();
+    double GetSpread();
+    bool ValidateSpreadConditions();
+    double AdjustForSpread(double price, bool isBuyLevel);
+    void SetError(const string error);
+    bool IsValidCandleData(const CandleData& candleData);
+    double GetCorpoMinimo(AssetType assetType, const CandleFilters& filters);
 };
 
 //+------------------------------------------------------------------+
 //| Constructor                                                      |
 //+------------------------------------------------------------------+
-ChartVisualizer::ChartVisualizer() : m_objectPrefix("BreakoutEA_RefLine_"),
-                                    m_lineColor(clrRed),
-                                    m_lineWidth(1),
-                                    m_lineStyle(STYLE_SOLID),
-                                    m_lastCleanupDate(0),
-                                    m_objectCount(0),
-                                    m_timeManager(NULL)
+CandleAnalyzer::CandleAnalyzer() : m_symbol(""),
+                                  m_timeframe(PERIOD_CURRENT),
+                                  m_spreadBuffer(2.0),
+                                  m_entryDistance(1.0),
+                                  m_slDistance(1.0),
+                                  m_lastError(""),
+                                  m_assetDetector(NULL)
 {
-    ArrayResize(m_createdObjects, 0);
 }
 
 //+------------------------------------------------------------------+
 //| Destructor                                                       |
 //+------------------------------------------------------------------+
-ChartVisualizer::~ChartVisualizer()
+CandleAnalyzer::~CandleAnalyzer()
 {
-    CleanupAllLines();
-    
-    // Cleanup TimeManager
-    if(m_timeManager != NULL)
-    {
-        delete m_timeManager;
-        m_timeManager = NULL;
-    }
+    m_assetDetector = NULL; // Non eliminiamo perché non è di nostra proprietà
 }
 
 //+------------------------------------------------------------------+
-//| Inizializza il visualizzatore                                   |
+//| Inizializza CandleAnalyzer                                     |
 //+------------------------------------------------------------------+
-bool ChartVisualizer::Initialize(color lineColor = clrRed, int lineWidth = 1, ENUM_LINE_STYLE lineStyle = STYLE_SOLID)
+bool CandleAnalyzer::Initialize(const string symbol, ENUM_TIMEFRAMES timeframe, AssetDetector* assetDetector, double spreadBuffer = 2.0)
 {
-    Print("ChartVisualizer: Initializing...");
+    Print("CandleAnalyzer: Initializing for ", symbol, " on ", EnumToString(timeframe));
     
-    m_lineColor = lineColor;
-    m_lineWidth = lineWidth;
-    m_lineStyle = lineStyle;
-    m_lastCleanupDate = GetDateOnly(TimeCurrent());
-    
-    // Inizializza TimeManager interno
-    m_timeManager = new TimeManager();
-    if(m_timeManager == NULL)
+    if(symbol == "")
     {
-        Print("ChartVisualizer ERROR: Failed to create TimeManager");
+        SetError("Empty symbol provided");
         return false;
     }
     
-    // Cleanup eventuali linee precedenti
-    CleanupAllLines();
+    m_symbol = symbol;
+    m_timeframe = timeframe;
+    m_spreadBuffer = spreadBuffer;
+    m_assetDetector = assetDetector;
     
-    Print("ChartVisualizer: Initialized successfully");
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Disegna righe di riferimento per entrambe le sessioni          |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::DrawSessionReferences(int session1Hour, int session1Min, int session2Hour, int session2Min, bool isSummerTime)
-{
-    if(m_timeManager == NULL)
+    // Converti spread buffer in points
+    double point = GetPoint();
+    m_entryDistance = m_spreadBuffer * point;
+    m_slDistance = m_spreadBuffer * point;
+    
+    // Verifica che il simbolo sia disponibile
+    if(!SymbolInfoInteger(symbol, SYMBOL_SELECT))
     {
-        Print("ChartVisualizer ERROR: TimeManager not initialized");
+        SetError("Symbol not available: " + symbol);
         return false;
     }
     
-    Print("ChartVisualizer: Drawing session references...");
-    Print("DST Status: ", isSummerTime ? "SUMMER (+1h)" : "WINTER (base)");
-    
-    bool success = true;
-    
-    // Crea e disegna Session 1
-    datetime session1Time = m_timeManager.CreateBrokerSessionTime(session1Hour, session1Min, isSummerTime);
-    if(session1Time > 0)
-    {
-        if(DrawReferenceCandle(session1Time, "Session1"))
-        {
-            Print("✅ Session1 line: ", TimeToString(session1Time, TIME_DATE | TIME_MINUTES), " broker time");
-            m_timeManager.LogSessionTime("SESSION 1", session1Hour, session1Min, isSummerTime);
-        }
-        else
-        {
-            Print("❌ Failed to draw Session1 line");
-            success = false;
-        }
-    }
-    else
-    {
-        Print("❌ Invalid Session1 time calculated");
-        success = false;
-    }
-    
-    // Crea e disegna Session 2
-    datetime session2Time = m_timeManager.CreateBrokerSessionTime(session2Hour, session2Min, isSummerTime);
-    if(session2Time > 0)
-    {
-        if(DrawReferenceCandle(session2Time, "Session2"))
-        {
-            Print("✅ Session2 line: ", TimeToString(session2Time, TIME_DATE | TIME_MINUTES), " broker time");
-            m_timeManager.LogSessionTime("SESSION 2", session2Hour, session2Min, isSummerTime);
-        }
-        else
-        {
-            Print("❌ Failed to draw Session2 line");
-            success = false;
-        }
-    }
-    else
-    {
-        Print("❌ Invalid Session2 time calculated");
-        success = false;
-    }
-    
-    if(success)
-    {
-        Print("ChartVisualizer: All session references drawn successfully");
-    }
-    else
-    {
-        Print("ChartVisualizer: Some session references failed to draw");
-    }
-    
-    return success;
-}
-
-//+------------------------------------------------------------------+
-//| Disegna riga verticale su candela di riferimento               |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::DrawReferenceCandle(datetime candleTime, string sessionName = "")
-{
-    // Genera nome univoco per l'oggetto
-    string objectName = GenerateObjectName(candleTime, sessionName);
-    
-    // Crea la linea verticale
-    if(!CreateVerticalLine(objectName, candleTime))
-    {
-        Print("ChartVisualizer ERROR: Failed to create vertical line for ", TimeToString(candleTime));
-        return false;
-    }
-    
-    // Aggiungi alla lista oggetti tracciati
-    AddToObjectList(objectName);
-    
-    Print("ChartVisualizer: Reference line created at ", TimeToString(candleTime), 
-          sessionName != "" ? " (Session: " + sessionName + ")" : "");
+    Print("CandleAnalyzer: Point value = ", point, ", Entry distance = ", m_entryDistance);
+    Print("CandleAnalyzer: Initialized successfully");
     
     return true;
 }
 
 //+------------------------------------------------------------------+
-//| Pulisce linee del giorno precedente                            |
+//| Ottiene dati candela di riferimento                            |
 //+------------------------------------------------------------------+
-bool ChartVisualizer::CleanupPreviousDayLines()
+bool CandleAnalyzer::GetReferenceCandleData(datetime sessionTime, CandleData& candleData)
 {
-    datetime currentDate = GetDateOnly(TimeCurrent());
+    Print("CandleAnalyzer: Getting reference candle for session time: ", TimeToString(sessionTime, TIME_DATE | TIME_MINUTES));
     
-    // Se è ancora lo stesso giorno, non fare cleanup
-    if(currentDate == m_lastCleanupDate)
+    int candleIndex;
+    if(!FindReferenceCandleIndex(sessionTime, candleIndex))
+    {
+        SetError("Cannot find reference candle for session time");
+        return false;
+    }
+    
+    // Estrai dati OHLC
+    candleData.time = iTime(m_symbol, m_timeframe, candleIndex);
+    candleData.open = iOpen(m_symbol, m_timeframe, candleIndex);
+    candleData.high = iHigh(m_symbol, m_timeframe, candleIndex);
+    candleData.low = iLow(m_symbol, m_timeframe, candleIndex);
+    candleData.close = iClose(m_symbol, m_timeframe, candleIndex);
+    
+    // Validazione dati
+    if(!IsValidCandleData(candleData))
+    {
+        SetError("Invalid candle data retrieved");
+        return false;
+    }
+    
+    // Log dati candela
+    Print("=== REFERENCE CANDLE DATA ===");
+    Print("Time: ", TimeToString(candleData.time, TIME_DATE | TIME_MINUTES));
+    Print("OHLC: O=", DoubleToString(candleData.open, _Digits), 
+          " H=", DoubleToString(candleData.high, _Digits),
+          " L=", DoubleToString(candleData.low, _Digits), 
+          " C=", DoubleToString(candleData.close, _Digits));
+    Print("Body: ", DoubleToString(candleData.GetBody(), _Digits), 
+          " | Range: ", DoubleToString(candleData.high - candleData.low, _Digits));
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Calcola livelli di entrata                                     |
+//+------------------------------------------------------------------+
+EntryLevels CandleAnalyzer::CalculateEntryLevels(const CandleData& candleData)
+{
+    EntryLevels levels;
+    
+    if(!IsValidCandleData(candleData))
+    {
+        SetError("Invalid candle data for entry levels calculation");
+        return levels;
+    }
+    
+    // Calcola livelli base
+    levels.buyEntry = candleData.high + m_entryDistance;
+    levels.sellEntry = candleData.low - m_entryDistance;
+    levels.buySL = candleData.low - m_slDistance;
+    levels.sellSL = candleData.high + m_slDistance;
+    
+    // Ottieni prezzi correnti
+    MqlTick tick;
+    if(!SymbolInfoTick(m_symbol, tick))
+    {
+        SetError("Cannot get current tick data");
+        return levels;
+    }
+    
+    // Aggiusta per spread se necessario
+    double spread = tick.ask - tick.bid;
+    double spreadPoints = spread / GetPoint();
+    
+    Print("CandleAnalyzer: Current spread = ", DoubleToString(spreadPoints, 1), " points");
+    
+    // Se i livelli sono troppo vicini allo spread, aggiusta
+    if(MathAbs(levels.buyEntry - tick.ask) < spread * 2)
+    {
+        levels.buyEntry = tick.ask + spread + m_entryDistance;
+        Print("CandleAnalyzer: Adjusted buy entry for spread: ", DoubleToString(levels.buyEntry, _Digits));
+    }
+    
+    if(MathAbs(levels.sellEntry - tick.bid) < spread * 2)
+    {
+        levels.sellEntry = tick.bid - spread - m_entryDistance;
+        Print("CandleAnalyzer: Adjusted sell entry for spread: ", DoubleToString(levels.sellEntry, _Digits));
+    }
+    
+    // Validazione finale livelli
+    if(levels.buyEntry <= levels.buySL || levels.sellEntry >= levels.sellSL)
+    {
+        SetError("Invalid entry levels calculated");
+        return levels;
+    }
+    
+    levels.valid = true;
+    
+    // Log livelli calcolati
+    Print("=== ENTRY LEVELS CALCULATED ===");
+    Print("Buy Entry: ", DoubleToString(levels.buyEntry, _Digits), " | SL: ", DoubleToString(levels.buySL, _Digits));
+    Print("Sell Entry: ", DoubleToString(levels.sellEntry, _Digits), " | SL: ", DoubleToString(levels.sellSL, _Digits));
+    Print("Buy Risk: ", DoubleToString((levels.buyEntry - levels.buySL) / GetPoint(), 1), " points");
+    Print("Sell Risk: ", DoubleToString((levels.sellSL - levels.sellEntry) / GetPoint(), 1), " points");
+    
+    return levels;
+}
+
+//+------------------------------------------------------------------+
+//| Valida setup completo                                          |
+//+------------------------------------------------------------------+
+bool CandleAnalyzer::ValidateSetup(const EntryLevels& levels)
+{
+    if(!levels.valid)
+    {
+        SetError("Entry levels are not valid");
+        return false;
+    }
+    
+    // Verifica spread corrente
+    if(!ValidateSpreadConditions())
+    {
+        SetError("Spread conditions not met");
+        return false;
+    }
+    
+    // Verifica che i livelli abbiano senso
+    double buyRisk = levels.buyEntry - levels.buySL;
+    double sellRisk = levels.sellSL - levels.sellEntry;
+    
+    if(buyRisk <= 0 || sellRisk <= 0)
+    {
+        SetError("Invalid risk calculation");
+        return false;
+    }
+    
+    // Verifica che i rischi siano simili (sanity check)
+    double riskRatio = MathMax(buyRisk, sellRisk) / MathMin(buyRisk, sellRisk);
+    if(riskRatio > 2.0)
+    {
+        SetError("Risk asymmetry too high between buy and sell");
+        return false;
+    }
+    
+    Print("CandleAnalyzer: Setup validation PASSED");
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Verifica filtro corpo candela                                  |
+//+------------------------------------------------------------------+
+bool CandleAnalyzer::PassesCorporeFilter(const CandleData& candleData, const CandleFilters& filters)
+{
+    if(!filters.corpoFilterActive)
+    {
+        Print("CandleAnalyzer: Corpo filter DISABLED - Setup accepted");
         return true;
-    
-    Print("ChartVisualizer: Cleaning up previous day lines...");
-    
-    int cleaned = 0;
-    
-    // Scansiona tutti gli oggetti tracciati
-    for(int i = m_objectCount - 1; i >= 0; i--)
-    {
-        if(ShouldCleanupObject(m_createdObjects[i], currentDate))
-        {
-            if(DeleteObject(m_createdObjects[i]))
-            {
-                RemoveFromObjectList(m_createdObjects[i]);
-                cleaned++;
-            }
-        }
     }
     
-    m_lastCleanupDate = currentDate;
-    
-    Print("ChartVisualizer: Cleaned up ", cleaned, " previous day lines");
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Pulisce tutte le linee                                         |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::CleanupAllLines()
-{
-    Print("ChartVisualizer: Cleaning up all lines...");
-    
-    int cleaned = 0;
-    
-    // Elimina tutti gli oggetti tracciati
-    for(int i = 0; i < m_objectCount; i++)
+    // Ottieni tipo asset
+    AssetType assetType = ASSET_UNKNOWN;
+    if(m_assetDetector != NULL)
     {
-        if(DeleteObject(m_createdObjects[i]))
-            cleaned++;
+        assetType = m_assetDetector.GetAssetType(m_symbol);
     }
     
-    // Reset array
-    ArrayResize(m_createdObjects, 0);
-    m_objectCount = 0;
+    // Calcola corpo minimo richiesto
+    double corpoMinimo = GetCorpoMinimo(assetType, filters);
+    double corpoEffettivo = candleData.GetBody();
     
-    Print("ChartVisualizer: Cleaned up ", cleaned, " lines");
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Genera nome univoco per l'oggetto grafico                      |
-//+------------------------------------------------------------------+
-string ChartVisualizer::GenerateObjectName(datetime candleTime, string sessionName)
-{
-    string name = m_objectPrefix;
-    name += TimeToString(candleTime, TIME_DATE | TIME_MINUTES);
-    name = StringReplace(name, ":", "");
-    name = StringReplace(name, " ", "_");
-    name = StringReplace(name, ".", "");
-    
-    if(sessionName != "")
-        name += "_" + sessionName;
-    
-    return name;
-}
-
-//+------------------------------------------------------------------+
-//| Crea linea verticale sul grafico con testo orario              |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::CreateVerticalLine(string objectName, datetime time)
-{
-    // Elimina oggetto se già esiste
-    if(ObjectFind(0, objectName) >= 0)
-        ObjectDelete(0, objectName);
-    
-    // Crea nuova linea verticale
-    if(!ObjectCreate(0, objectName, OBJ_VLINE, 0, time, 0))
+    // Converti in unità appropriate
+    if(assetType == ASSET_FOREX)
     {
-        Print("ChartVisualizer ERROR: Failed to create vertical line object: ", objectName);
-        return false;
-    }
-    
-    // Imposta proprietà linea
-    ObjectSetInteger(0, objectName, OBJPROP_COLOR, m_lineColor);
-    ObjectSetInteger(0, objectName, OBJPROP_WIDTH, m_lineWidth);
-    ObjectSetInteger(0, objectName, OBJPROP_STYLE, m_lineStyle);
-    ObjectSetInteger(0, objectName, OBJPROP_BACK, true);  // Dietro il grafico
-    ObjectSetInteger(0, objectName, OBJPROP_SELECTABLE, false);  // Non selezionabile
-    ObjectSetInteger(0, objectName, OBJPROP_HIDDEN, true);  // Nascosto nella lista oggetti
-    
-    // Imposta descrizione
-    string description = "Reference Candle: " + TimeToString(time, TIME_DATE | TIME_MINUTES);
-    ObjectSetString(0, objectName, OBJPROP_TEXT, description);
-    
-    // Crea testo con orario in basso alla linea
-    string textObjectName = objectName + "_Text";
-    if(CreateTimeLabel(textObjectName, time))
-    {
-        Print("ChartVisualizer: Time label created for ", TimeToString(time, TIME_MINUTES));
-    }
-    
-    // Refresh chart
-    ChartRedraw(0);
-    
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Crea etichetta temporale per la linea verticale                |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::CreateTimeLabel(string labelName, datetime time)
-{
-    // Elimina etichetta se già esiste
-    if(ObjectFind(0, labelName) >= 0)
-        ObjectDelete(0, labelName);
-    
-    // Ottieni range prezzo del grafico per posizionamento
-    double chartHigh = ChartGetDouble(0, CHART_PRICE_MAX);
-    double chartLow = ChartGetDouble(0, CHART_PRICE_MIN);
-    double priceRange = chartHigh - chartLow;
-    
-    // Posiziona testo nel 10% inferiore del grafico
-    double labelPrice = chartLow + (priceRange * 0.10);
-    
-    // Crea oggetto testo
-    if(!ObjectCreate(0, labelName, OBJ_TEXT, 0, time, labelPrice))
-    {
-        Print("ChartVisualizer ERROR: Failed to create time label: ", labelName);
-        return false;
-    }
-    
-    // Imposta proprietà del testo
-    string timeText = TimeToString(time, TIME_MINUTES);  // Solo HH:MM
-    ObjectSetString(0, labelName, OBJPROP_TEXT, timeText);
-    ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
-    ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
-    ObjectSetInteger(0, labelName, OBJPROP_COLOR, m_lineColor);
-    ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, ANCHOR_UPPER);
-    ObjectSetInteger(0, labelName, OBJPROP_BACK, false);  // Sopra il grafico
-    ObjectSetInteger(0, labelName, OBJPROP_SELECTABLE, false);
-    ObjectSetInteger(0, labelName, OBJPROP_HIDDEN, true);
-    
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Elimina oggetto grafico                                        |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::DeleteObject(string objectName)
-{
-    bool success = true;
-    
-    // Elimina linea principale
-    if(ObjectFind(0, objectName) >= 0)
-    {
-        if(!ObjectDelete(0, objectName))
-        {
-            Print("ChartVisualizer WARNING: Failed to delete object: ", objectName);
-            success = false;
-        }
-    }
-    
-    // Elimina etichetta associata
-    string textObjectName = objectName + "_Text";
-    if(ObjectFind(0, textObjectName) >= 0)
-    {
-        if(!ObjectDelete(0, textObjectName))
-        {
-            Print("ChartVisualizer WARNING: Failed to delete text label: ", textObjectName);
-            success = false;
-        }
-    }
-    
-    if(success)
-    {
-        ChartRedraw(0);
-    }
-    
-    return success;
-}
-
-//+------------------------------------------------------------------+
-//| Determina se oggetto deve essere eliminato                     |
-//+------------------------------------------------------------------+
-bool ChartVisualizer::ShouldCleanupObject(string objectName, datetime currentDate)
-{
-    // Estrai data dall'oggetto (dal nome)
-    // Il nome contiene la data/ora, quindi possiamo fare un parsing semplice
-    
-    // Per ora, criterio semplice: se l'oggetto esiste da più di 1 giorno
-    datetime objectTime = 0;
-    
-    // Prova a ottenere il tempo dall'oggetto se esiste ancora
-    if(ObjectFind(0, objectName) >= 0)
-    {
-        objectTime = (datetime)ObjectGetInteger(0, objectName, OBJPROP_TIME);
-        datetime objectDate = GetDateOnly(objectTime);
+        double corpoMinimoPrice = corpoMinimo * GetPoint() * 10; // Converti pips a prezzo
+        bool passed = (corpoEffettivo >= corpoMinimoPrice);
         
-        // Elimina se è di un giorno precedente
-        return (objectDate < currentDate);
+        Print("CandleAnalyzer: Corpo filter (FOREX):");
+        Print("  Required: ", DoubleToString(corpoMinimo, 1), " pips (", DoubleToString(corpoMinimoPrice, _Digits), ")");
+        Print("  Actual: ", DoubleToString(corpoEffettivo, _Digits), " (", DoubleToString(corpoEffettivo / (GetPoint() * 10), 1), " pips)");
+        Print("  Result: ", passed ? "PASSED" : "FAILED");
+        
+        return passed;
     }
-    
-    return true;  // Se non esiste più, rimuovi dalla lista
-}
-
-//+------------------------------------------------------------------+
-//| Aggiunge oggetto alla lista tracciata                          |
-//+------------------------------------------------------------------+
-void ChartVisualizer::AddToObjectList(string objectName)
-{
-    // Ridimensiona array se necessario
-    ArrayResize(m_createdObjects, m_objectCount + 1);
-    
-    // Aggiungi nuovo oggetto
-    m_createdObjects[m_objectCount] = objectName;
-    m_objectCount++;
-}
-
-//+------------------------------------------------------------------+
-//| Rimuove oggetto dalla lista tracciata                          |
-//+------------------------------------------------------------------+
-void ChartVisualizer::RemoveFromObjectList(string objectName)
-{
-    // Trova oggetto nella lista
-    for(int i = 0; i < m_objectCount; i++)
+    else
     {
-        if(m_createdObjects[i] == objectName)
-        {
-            // Sposta elementi successivi
-            for(int j = i; j < m_objectCount - 1; j++)
-            {
-                m_createdObjects[j] = m_createdObjects[j + 1];
-            }
-            
-            m_objectCount--;
-            ArrayResize(m_createdObjects, m_objectCount);
-            break;
-        }
+        double corpoMinimoPrice = corpoMinimo * GetPoint(); // Converti punti a prezzo
+        bool passed = (corpoEffettivo >= corpoMinimoPrice);
+        
+        Print("CandleAnalyzer: Corpo filter (", AssetTypeToString(assetType), "):");
+        Print("  Required: ", DoubleToString(corpoMinimo, 1), " points (", DoubleToString(corpoMinimoPrice, _Digits), ")");
+        Print("  Actual: ", DoubleToString(corpoEffettivo, _Digits), " (", DoubleToString(corpoEffettivo / GetPoint(), 1), " points)");
+        Print("  Result: ", passed ? "PASSED" : "FAILED");
+        
+        return passed;
     }
 }
 
 //+------------------------------------------------------------------+
-//| Ottiene solo la data (senza orario)                            |
+//| PRIVATE METHODS                                                 |
 //+------------------------------------------------------------------+
-datetime ChartVisualizer::GetDateOnly(datetime fullDateTime)
+
+bool CandleAnalyzer::FindReferenceCandleIndex(datetime sessionTime, int& candleIndex)
 {
-    MqlDateTime dt;
-    TimeToStruct(fullDateTime, dt);
-    dt.hour = 0;
-    dt.min = 0;
-    dt.sec = 0;
-    return StructToTime(dt);
+    // Cerca la candela che contiene il tempo di sessione
+    candleIndex = iBarShift(m_symbol, m_timeframe, sessionTime);
+    
+    if(candleIndex < 0)
+    {
+        SetError("Cannot find candle for session time");
+        return false;
+    }
+    
+    // Verifica che abbiamo dati sufficienti
+    int totalBars = iBars(m_symbol, m_timeframe);
+    if(candleIndex >= totalBars - 1)
+    {
+        SetError("Insufficient candle data available");
+        return false;
+    }
+    
+    Print("CandleAnalyzer: Found reference candle at index ", candleIndex);
+    return true;
 }
 
-#endif // CHART_VISUALIZER_MQH
+double CandleAnalyzer::GetPoint()
+{
+    return SymbolInfoDouble(m_symbol, SYMBOL_POINT);
+}
+
+double CandleAnalyzer::GetSpread()
+{
+    MqlTick tick;
+    if(SymbolInfoTick(m_symbol, tick))
+    {
+        return tick.ask - tick.bid;
+    }
+    return 0;
+}
+
+bool CandleAnalyzer::ValidateSpreadConditions()
+{
+    double spread = GetSpread();
+    double spreadPoints = spread / GetPoint();
+    
+    // Usa un limite di spread massimo (es. 10 punti per Forex)
+    double maxSpreadPoints = 50.0; // Configurabile
+    
+    if(spreadPoints > maxSpreadPoints)
+    {
+        SetError("Spread too high: " + DoubleToString(spreadPoints, 1) + " points");
+        return false;
+    }
+    
+    Print("CandleAnalyzer: Spread validation OK: ", DoubleToString(spreadPoints, 1), " points");
+    return true;
+}
+
+void CandleAnalyzer::SetError(const string error)
+{
+    m_lastError = error;
+    Print("CandleAnalyzer ERROR: ", error);
+}
+
+bool CandleAnalyzer::IsValidCandleData(const CandleData& candleData)
+{
+    return (candleData.high > candleData.low && 
+            candleData.open > 0 && 
+            candleData.close > 0 &&
+            candleData.high >= candleData.open &&
+            candleData.high >= candleData.close &&
+            candleData.low <= candleData.open &&
+            candleData.low <= candleData.close);
+}
+
+double CandleAnalyzer::GetCorpoMinimo(AssetType assetType, const CandleFilters& filters)
+{
+    switch(assetType)
+    {
+        case ASSET_FOREX:
+            return filters.forexCorpoMinPips;
+        case ASSET_INDICES:
+            return filters.indicesCorpoMinPoints;
+        case ASSET_CRYPTO:
+            return filters.cryptoCorpoMinPoints;
+        case ASSET_COMMODITY:
+            return filters.commodityCorpoMinPoints;
+        default:
+            return filters.forexCorpoMinPips; // Default fallback
+    }
+}
+
+#endif // CANDLE_ANALYZER_MQH
